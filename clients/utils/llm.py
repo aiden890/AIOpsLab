@@ -25,7 +25,7 @@ load_dotenv()
 
 CACHE_DIR = Path("./cache_dir")
 CACHE_PATH = CACHE_DIR / "cache.json"
-GPT_MODEL = "gpt-4o"
+GPT_MODEL = os.getenv("OPENAI_MODEL")
 
 
 @dataclass
@@ -89,6 +89,21 @@ class GPTClient:
             if not api_key:
                 raise ValueError("API key must be provided or set in OPENAI_API_KEY environment variable")
             return OpenAI(api_key=api_key)
+        elif auth_type == "azure_key":
+            api_key = api_key or os.getenv("AZURE_OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "Azure API key must be provided or set in AZURE_OPENAI_API_KEY environment variable"
+                )
+            azure_base_url = os.getenv("AZURE_OPENAI_BASE_URL")
+            if not azure_base_url:
+                raise ValueError(
+                    "Azure base URL must be provided or set in AZURE_OPENAI_BASE_URL environment variable"
+                )
+            return OpenAI(
+                api_key=api_key,
+                base_url=azure_base_url,
+            )
         elif auth_type in azure_identity_opts:
             if not azure_config_file:
                 raise ValueError("Azure configuration file must be provided for access via managed identity.\n Check AIOpsLab/clients/configs/example_azure_config.yml for an example.")

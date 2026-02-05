@@ -58,7 +58,7 @@ def trim_history_to_token_limit(history, max_tokens=120000, model="gpt-4"):
 class Agent:
     def __init__(self):
         self.history = []
-        self.llm = GPTClient()
+        self.llm = GPTClient(auth_type="azure_key")
 
     def init_context(self, problem_desc: str, instructions: str, apis: str):
         """Initialize the context for the agent."""
