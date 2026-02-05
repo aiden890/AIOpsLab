@@ -12,7 +12,7 @@ import json
 import tiktoken
 from aiopslab.orchestrator import Orchestrator
 from aiopslab.orchestrator.problems.registry import ProblemRegistry
-from clients.utils.llm import GPTClient
+from clients.utils.llm import vLLMClient
 from clients.utils.templates import DOCS
 
 RESP_INSTR = """DO NOT REPEAT ACTIONS! Respond with:
@@ -58,7 +58,7 @@ def trim_history_to_token_limit(history, max_tokens=120000, model="gpt-4"):
 class Agent:
     def __init__(self):
         self.history = []
-        self.llm = GPTClient()
+        self.llm = vLLMClient()
 
     def init_context(self, problem_desc: str, instructions: str, apis: str):
         """Initialize the context for the agent."""

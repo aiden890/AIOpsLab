@@ -363,6 +363,7 @@ scripts/ansible/inventory.yml
 
 # Local development files
 CLAUDE.md
+playground_aiden/
 
 # OpenRCA dataset - keep directory structure, ignore data
 aiopslab/service/openrca_dataset/*

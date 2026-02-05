@@ -7,7 +7,7 @@ from aiopslab.service.helm import Helm
 from aiopslab.service.kubectl import KubeCtl
 from aiopslab.session import Session
 from aiopslab.orchestrator.problems.registry import ProblemRegistry
-from aiopslab.orchestrator.parser import ResponseParser
+from aiopslab.orchestrator.base_orchestrator import BaseOrchestrator
 from aiopslab.utils.status import *
 from aiopslab.utils.critical_section import CriticalSection
 from aiopslab.service.telemetry.prometheus import Prometheus
@@ -18,18 +18,15 @@ import atexit
 import os
 
 
-class Orchestrator:
+class Orchestrator(BaseOrchestrator):
     def __init__(self, results_dir=None):
-        self.agent = None
-        self.session = None
-        self.parser = ResponseParser()
+        super().__init__(results_dir)
         self.probs = ProblemRegistry()
         self.sprint = SessionPrint()
         self.execution_start_time = None
         self.execution_end_time = None
         self.kubectl = KubeCtl()
         self.use_wandb = os.getenv("USE_WANDB", "false").lower() == "true"
-        self.results_dir = results_dir
 
     def init_problem(self, problem_id: str):
         """Initialize a problem instance for the agent to solve.
@@ -89,58 +86,6 @@ class Orchestrator:
         actions = prob.get_available_actions()
 
         return task_desc, instructions, actions
-
-    def register_agent(self, agent, name="agent"):
-        """Register the agent for the current session.
-
-        Args:
-            agent: The agent to register.
-            name: The name of the agent (default: "agent").
-        """
-        self.agent = agent
-        self.agent_name = name
-
-    async def ask_agent(self, input):
-        """Ask the agent for the next action given the current context."""
-        assert self.session is not None
-        assert self.agent is not None
-
-        agent_response = await self.agent.get_action(input)
-        self.session.add({"role": "assistant", "content": agent_response})
-
-        return agent_response
-
-    async def ask_env(self, input):
-        """Ask the environment for the observation given the current action."""
-        assert self.session is not None
-
-        try:
-            resp = self.parser.parse(input)
-        except ResponseParsingError as e:
-            self.session.add({"role": "env", "content": str(e)})
-            return str(e)
-
-        api, args, kwargs = resp["api_name"], resp["args"], resp["kwargs"]
-
-        # if submit, save solution for eval
-        if api == "submit":
-            self.session.set_solution(args[0] if len(args) == 1 else args)
-
-        try:
-            env_response = self.session.problem.perform_action(api, *args, **kwargs)
-
-            if hasattr(env_response, "error"):
-                env_response = str(env_response)
-                print("An error occurred:", env_response)
-        except InvalidActionError as e:
-            env_response = str(e)
-        except Exception as e:
-            env_response = str(e)
-            print("Unhandled exception:", e)
-
-        self.session.add({"role": "env", "content": env_response})
-
-        return env_response
 
     async def start_problem(self, max_steps: int):
         """Start the task and run for a specified number of steps.
