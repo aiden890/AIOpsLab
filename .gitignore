@@ -360,3 +360,10 @@ aiopslab/observer/prometheus/prometheus/Chart.lock
 # Ignore customized config files
 aiopslab/config.yml
 scripts/ansible/inventory.yml
+
+# Local development files
+CLAUDE.md
+
+# OpenRCA dataset - keep directory structure, ignore data
+aiopslab/service/openrca_dataset/*
+!aiopslab/service/openrca_dataset/README.md
