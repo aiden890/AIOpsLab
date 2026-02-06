@@ -210,7 +210,80 @@ To analyze root causes, you can:
 
 ---
 
-## 5. About Missing "Failure Logs"
+## 5. Error Categories and Reasons (for RCA)
+
+Based on the AcmeTrace NSDI'24 paper (Table 3), failures are categorized into three levels:
+
+### Category: Infrastructure
+
+Hardware and system-level errors.
+
+| Reason | Description | XID Mapping | Typical Duration |
+|--------|-------------|-------------|------------------|
+| NVLink Error | NVLink interconnect failure | XID 43, 45 | ~155 min |
+| CUDA Error | CUDA runtime/driver error | XID 31, 43, 94 | ~586 min |
+| Node Failure | Physical node crash | XID 43 | ~535 min |
+| ECC Error | GPU memory ECC error | XID 31, 94 | ~1192 min |
+| Network Error | Network communication failure | - | ~310 min |
+| Connection Error | Connection establishment failure | - | ~0.5 min |
+| S3 Storage Error | Object storage access failure | - | ~202 min |
+| NCCL Timeout | NCCL collective timeout | XID 43 | ~48 min |
+| NCCL Remote Error | NCCL remote peer error | XID 43 | ~22 min |
+
+### Category: Framework
+
+ML framework errors (PyTorch, TensorFlow).
+
+| Reason | Description | Typical Duration |
+|--------|-------------|------------------|
+| Dataloader Killed | Data loading process killed | ~961 min |
+| Out of Memory | GPU/CPU memory exhaustion | ~14 min |
+| Runtime Error | Generic runtime error | ~4 min |
+| Assertion Error | Assertion failure | ~3 min |
+| Attribute Error | Missing attribute | ~1 min |
+| Value Error | Invalid value | ~4 min |
+| Zero Division Error | Division by zero | ~15 min |
+
+### Category: Script
+
+User code/script errors.
+
+| Reason | Description | Typical Duration |
+|--------|-------------|------------------|
+| File Not Found | Missing file/path | ~0.4 min |
+| Type Error | Type mismatch | ~0.3 min |
+| Import Error | Module import failure | ~0.4 min |
+| Syntax Error | Python syntax error | ~0.6 min |
+| Key Error | Dictionary key not found | ~1.6 min |
+| Index Error | Index out of bounds | ~0.9 min |
+| OS Error | Operating system error | ~0.8 min |
+| Permission Error | Permission denied | ~0.8 min |
+| Name Error | Undefined variable | ~0.5 min |
+
+### XID to Category/Reason Mapping
+
+| XID Code | Category | Reason |
+|----------|----------|--------|
+| 31 | Infrastructure | ECC Error |
+| 43 | Infrastructure | NVLink Error / Node Failure |
+| 45 | Infrastructure | CUDA Error |
+| 94 | Infrastructure | ECC Error |
+
+### Heuristics for Unknown Failures
+
+When no XID error is found, use job characteristics to infer:
+
+| Condition | Inferred Category | Inferred Reason |
+|-----------|-------------------|-----------------|
+| duration < 60s, gpu_num ≤ 8 | Script | Type/Import/Syntax Error |
+| duration < 30min | Framework | Runtime/OOM Error |
+| duration > 2hr, gpu_num ≥ 64 | Infrastructure | Network/NCCL Error |
+| state = NODE_FAIL | Infrastructure | Node Failure |
+| state = TIMEOUT | Infrastructure | NCCL Timeout |
+
+---
+
+## 6. About Missing "Failure Logs"
 
 The paper mentions "runtime logs" but the public dataset contains:
 
@@ -225,7 +298,7 @@ The raw text logs (stdout/stderr from training jobs) are **not publicly released
 
 ---
 
-## 6. Usage Examples
+## 7. Usage Examples
 
 ### Load Job Trace
 
@@ -281,7 +354,7 @@ print(f"GPUs with XID 43 errors: {len(gpus_with_errors)}")
 
 ---
 
-## 7. References
+## 8. References
 
 - **Paper**: [Characterization of Large Language Model Development in the Datacenter](https://arxiv.org/abs/2403.07648) (NSDI'24)
 - **GitHub**: https://github.com/InternLM/AcmeTrace
