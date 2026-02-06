@@ -255,13 +255,15 @@ class vLLMClient:
     """Abstraction for local LLM models."""
 
     def __init__(self,
-                 model="Qwen/Qwen2.5-Coder-3B-Instruct",
+                 model=None,
+                 base_url=None,
                  repetition_penalty=1.0,
                  temperature=1.0,
                  top_p=0.95,
                  max_tokens=1024):
         self.cache = Cache()
-        self.model = model
+        self.model = model or os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-Coder-3B-Instruct")
+        self.base_url = base_url or os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
         self.repetition_penalty = repetition_penalty
         self.temperature = temperature
         self.top_p = top_p
@@ -273,7 +275,7 @@ class vLLMClient:
             if cache_result is not None:
                 return cache_result
 
-        client = OpenAI(api_key="EMPTY", base_url="http://localhost:8000/v1")
+        client = OpenAI(api_key="EMPTY", base_url=self.base_url)
         try:
             response = client.chat.completions.create(
                 messages=payload,  # type: ignore

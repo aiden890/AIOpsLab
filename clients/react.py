@@ -12,6 +12,7 @@ import json
 import tiktoken
 from aiopslab.orchestrator import Orchestrator
 from aiopslab.orchestrator.problems.registry import ProblemRegistry
+from clients.utils.llm import vLLMClient
 from clients.utils.llm import GPTClient
 from clients.utils.templates import DOCS
 

@@ -35,3 +35,6 @@ ASTRONOMY_SHOP_METADATA = BASE_DIR / "service" / "metadata" / "astronomy-shop.js
 TIDB_METADATA = BASE_DIR / "service" / "metadata" / "tidb-with-operator.json"
 FLIGHT_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "flight-ticket.json"
 FLOWER_METADATA = BASE_DIR / "service" / "metadata" / "flower.json"
+
+# OpenRCA dataset
+OPENRCA_DATASET_DIR = BASE_DIR / "service" / "openrca_dataset"
