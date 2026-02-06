@@ -9,15 +9,7 @@ import ast
 from aiopslab.utils.status import ResponseParsingError
 
 
-class ResponseParser:
-    def __init__(self):
-        pass
-
-    def validate(self, response: str):
-        actions = re.findall(r"```\s*\n(.*?)\n```", response, re.DOTALL)
-        if len(actions) != 1:
-            raise ResponseParsingError("""
-Format validation failure. Only have one pair of three ticks in your block and check the ticks. 
+DEFAULT_EXAMPLES = """
 Correct example 1:
 I should run:
 ```
@@ -25,10 +17,35 @@ exec_shell("ls")
 ```
 
 Correct example 2:
-Check k8s info 
+Check k8s info
 ```
 exec_shell("kubectl get services --all-namespaces")
 ```
+"""
+
+ACMETRACE_EXAMPLES = """
+Correct example 1:
+```
+get_jobs(start_time="2023-08-15", end_time="2023-08-16")
+```
+
+Correct example 2:
+```
+get_gpu_util(start_time="2023-08-15 10:00:00", end_time="2023-08-15 11:00:00")
+```
+"""
+
+
+class ResponseParser:
+    def __init__(self, examples: str = None):
+        self.examples = examples or DEFAULT_EXAMPLES
+
+    def validate(self, response: str):
+        actions = re.findall(r"```\s*\n(.*?)\n```", response, re.DOTALL)
+        if len(actions) != 1:
+            raise ResponseParsingError(f"""
+Format validation failure. Only have one pair of three ticks in your block and check the ticks.
+{self.examples}
             """)
 
     def parse(self, response: str) -> dict:

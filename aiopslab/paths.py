@@ -38,3 +38,6 @@ FLOWER_METADATA = BASE_DIR / "service" / "metadata" / "flower.json"
 
 # OpenRCA dataset
 OPENRCA_DATASET_DIR = BASE_DIR / "service" / "openrca_dataset"
+
+# AcmeTrace Kalos dataset
+ACME_KALOS_DIR = BASE_PARENT_DIR / "acme_cluster_dataset"
