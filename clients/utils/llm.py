@@ -297,7 +297,8 @@ class vLLMClient:
 
     def run(self, payload: list[dict[str, str]]) -> list[str]:
         response = self.inference(payload)
-        if self.cache is not None:
+        # Don't cache None responses
+        if self.cache is not None and response and None not in response:
             self.cache.add_to_cache(payload, response)
             self.cache.save_cache()
         return response
