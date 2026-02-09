@@ -19,11 +19,11 @@ import os
 
 
 class Orchestrator:
-    def __init__(self, results_dir=None):
+    def __init__(self, results_dir=None, registry=None):
         self.agent = None
         self.session = None
         self.parser = ResponseParser()
-        self.probs = ProblemRegistry()
+        self.probs = registry if registry is not None else ProblemRegistry()
         self.sprint = SessionPrint()
         self.execution_start_time = None
         self.execution_end_time = None

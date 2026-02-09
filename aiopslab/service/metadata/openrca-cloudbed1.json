@@ -1,0 +1,33 @@
+{
+    "Name": "OpenRCA Cloudbed-1",
+    "Namespace": "openrca-cloudbed-1",
+    "Desc": "A microservice-based online boutique application (cloudbed-1) from the OpenRCA dataset. Contains 10 services: adservice, cartservice, checkoutservice, currencyservice, emailservice, frontend, paymentservice, productcatalogservice, recommendationservice, shippingservice (+ redis-cart). Uses pre-recorded telemetry data (logs, metrics, traces) with 70 fault injection scenarios covering container and node-level faults.",
+    "Supported Operations": [
+        "Browse product catalog",
+        "Add items to cart",
+        "Place orders and checkout",
+        "Get product recommendations",
+        "Convert currencies",
+        "Process payments",
+        "Send order confirmation emails",
+        "Ship orders"
+    ],
+    "Services": [
+        "adservice",
+        "cartservice",
+        "checkoutservice",
+        "currencyservice",
+        "emailservice",
+        "frontend",
+        "paymentservice",
+        "productcatalogservice",
+        "recommendationservice",
+        "shippingservice",
+        "redis-cart"
+    ],
+    "Dataset Type": "market",
+    "Dataset Path": "openrca_dataset/Market/cloudbed-1",
+    "Has Logs": true,
+    "Metric Files": ["metric_container.csv", "metric_node.csv", "metric_service.csv", "metric_mesh.csv", "metric_runtime.csv"],
+    "Trace Format": "market"
+}

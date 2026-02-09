@@ -211,6 +211,7 @@ server:
 
   extraFlags:
     - web.enable-lifecycle
+    - web.enable-remote-write-receiver
     ## web.enable-admin-api flag controls access to the administrative HTTP API which includes functionality such as
     ## deleting time series. This is disabled by default.
     # - web.enable-admin-api
@@ -247,8 +248,8 @@ server:
 
   ## https://prometheus.io/docs/prometheus/latest/configuration/configuration/#tsdb
   ##
-  tsdb: {}
-    # out_of_order_time_window: 0s
+  tsdb:
+    out_of_order_time_window: 30m
 
   ## https://prometheus.io/docs/prometheus/latest/configuration/configuration/#exemplars
   ## Must be enabled via --enable-feature=exemplar-storage

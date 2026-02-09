@@ -35,3 +35,10 @@ ASTRONOMY_SHOP_METADATA = BASE_DIR / "service" / "metadata" / "astronomy-shop.js
 TIDB_METADATA = BASE_DIR / "service" / "metadata" / "tidb-with-operator.json"
 FLIGHT_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "flight-ticket.json"
 FLOWER_METADATA = BASE_DIR / "service" / "metadata" / "flower.json"
+
+# OpenRCA static log replay
+OPENRCA_CLOUDBED1_METADATA = BASE_DIR / "service" / "metadata" / "openrca-cloudbed1.json"
+OPENRCA_CLOUDBED2_METADATA = BASE_DIR / "service" / "metadata" / "openrca-cloudbed2.json"
+OPENRCA_TELECOM_METADATA = BASE_DIR / "service" / "metadata" / "openrca-telecom.json"
+OPENRCA_BANK_METADATA = BASE_DIR / "service" / "metadata" / "openrca-bank.json"
+OPENRCA_DATASET_DIR = BASE_PARENT_DIR / "openrca_dataset"

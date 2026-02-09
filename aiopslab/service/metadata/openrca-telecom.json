@@ -1,0 +1,21 @@
+{
+    "Name": "OpenRCA Telecom",
+    "Namespace": "openrca-telecom",
+    "Desc": "A telecom service application from the OpenRCA dataset. Contains docker containers (docker_001-008), OS nodes (os_001-021), and database services (db_003, db_007). Uses pre-recorded telemetry data (metrics, traces) with 52 fault injection scenarios covering CPU faults, DB connection issues, and network faults. Note: This dataset does not include application logs.",
+    "Supported Operations": [
+        "Process telecom service requests",
+        "Database operations (db_003, db_007)",
+        "Network communication between OS nodes"
+    ],
+    "Services": [
+        "docker_001", "docker_002", "docker_003", "docker_004",
+        "docker_005", "docker_006", "docker_008",
+        "os_001", "os_009", "os_017", "os_018", "os_020", "os_021",
+        "db_003", "db_007"
+    ],
+    "Dataset Type": "telecom",
+    "Dataset Path": "openrca_dataset/Telecom",
+    "Has Logs": false,
+    "Metric Files": ["metric_container.csv", "metric_node.csv", "metric_app.csv", "metric_service.csv", "metric_middleware.csv"],
+    "Trace Format": "telecom"
+}

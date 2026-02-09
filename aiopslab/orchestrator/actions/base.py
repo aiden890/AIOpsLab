@@ -64,6 +64,8 @@ class TaskActions:
                     )
                 elif namespace == "default" and "wrk2-job" in service:
                     user_service_pod = kubectl.get_pod_name(namespace, f"job-name=wrk2-job")
+                elif namespace.startswith("openrca-"):
+                    user_service_pod = kubectl.get_pod_name(namespace, f"app={service}")
                 else:
                         raise Exception
                 logs = kubectl.get_pod_logs(user_service_pod, namespace)

@@ -223,6 +223,9 @@ class ProblemRegistry:
             "flower_model_misconfig-detection",
         ]
 
+        # Register OpenRCA static replay problems dynamically
+        self._register_openrca_problems()
+
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")

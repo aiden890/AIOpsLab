@@ -1,0 +1,24 @@
+{
+    "Name": "OpenRCA Bank",
+    "Namespace": "openrca-bank",
+    "Desc": "A banking service application from the OpenRCA dataset. Contains Tomcat application servers (Tomcat01-04), MySQL databases (Mysql01-02), Redis caches (Redis01-02), integration gateways (IG01-02, MG01-02), and Apache web servers (apache01-02). Uses pre-recorded telemetry data (logs, metrics, traces) with 44 fault injection scenarios covering CPU, memory, disk I/O, JVM OOM, and network faults. Only telemetry for days 2021-03-04 through 2021-03-07 is available.",
+    "Supported Operations": [
+        "Process banking transactions",
+        "Database operations (MySQL, Redis)",
+        "Application gateway routing (IG, MG)",
+        "Web serving (Apache, Tomcat)"
+    ],
+    "Services": [
+        "Tomcat01", "Tomcat02", "Tomcat03", "Tomcat04",
+        "Mysql01", "Mysql02",
+        "Redis01", "Redis02",
+        "IG01", "IG02",
+        "MG01", "MG02",
+        "apache01", "apache02"
+    ],
+    "Dataset Type": "bank",
+    "Dataset Path": "openrca_dataset/Bank",
+    "Has Logs": true,
+    "Metric Files": ["metric_container.csv", "metric_app.csv"],
+    "Trace Format": "bank"
+}
