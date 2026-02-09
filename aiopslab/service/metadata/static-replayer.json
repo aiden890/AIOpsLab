@@ -1,0 +1,5 @@
+{
+    "Name": "Static Telemetry Replayer",
+    "Namespace": "static-replayer",
+    "Desc": "Replays static datasets (OpenRCA, Alibaba, ACME) as real-time telemetry with query-based time remapping and history bulk loading"
+}

@@ -123,9 +123,13 @@ class TaskActions:
         Returns:
             str: Path to the directory where metrics are saved.
         """
-        prometheus_url = (
-            "http://localhost:32000"  # Replace with your Prometheus server URL
-        )
+        # For Docker-based static replayers, use port 9090 (Docker Compose mapped port)
+        # For Kubernetes deployments, use port 32000 (kubectl port-forward)
+        if namespace in ["docker", "static-replayer"] or namespace.startswith("static-"):
+            prometheus_url = "http://localhost:9090"
+        else:
+            prometheus_url = "http://localhost:32000"
+
         prometheus_api = PrometheusAPI(prometheus_url, namespace)
         prometheus_api.initialize_pod_and_service_lists(namespace)
 

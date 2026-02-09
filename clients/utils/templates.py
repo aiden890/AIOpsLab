@@ -5,35 +5,32 @@
 
 # standard documentation and apis template
 
-DOCS = """{prob_desc}
-You are provided with the following APIs to interact with the service:
+DOCS = """SERVICE MONITORING TASK
 
+{prob_desc}
+
+Available monitoring APIs:
 
 {telemetry_apis}
 
-
-You are also provided an API to a secure terminal to the service where you can run commands:
-
+Diagnostic interface:
 
 {shell_api}
 
-
-Finally, you will submit your solution for this task using the following API:
-
+Submission API:
 
 {submit_api}
 
-
-At each turn think step-by-step and respond with:
-Thought: <your thought>
-Action: <your action>
+At each turn, respond with:
+Thought: <your analysis>
+Action: <your next step>
 """
 
 
 ### custom templates
 
 DOCS_SHELL_ONLY = """{prob_desc}
-You are provided with a direct API to a secure terminal to the service where you can run commands:
+You are provided with a diagnostic interface for the service:
 
 {shell_api}
 
@@ -54,7 +51,7 @@ You are provided with the following APIs to interact with the service:
 
 {telemetry_apis}
 
-You are also provided an API to a secure terminal to the service where you can run commands:
+You also have access to a diagnostic interface for the service:
 
 {shell_api}
 
@@ -63,5 +60,5 @@ Finally, you will submit your solution for this task using the following API:
 {submit_api}
 
 Collaborate with your team to analyze the problem and suggest appropriate API calls.
-Do not execute commands. Suggest API calls in the specified format within markdown code blocks.
+Suggest API calls in the specified format within markdown code blocks.
 """

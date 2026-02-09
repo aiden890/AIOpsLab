@@ -15,9 +15,9 @@ from aiopslab.orchestrator.problems.registry import ProblemRegistry
 from clients.utils.llm import GPTClient
 from clients.utils.templates import DOCS
 
-RESP_INSTR = """DO NOT REPEAT ACTIONS! Respond with:
-Thought: <your thought on the previous output>
-Action: <your action towards mitigating>
+RESP_INSTR = """Please avoid repeating previous actions. Respond with:
+Thought: <your analysis of the previous output>
+Action: <your next diagnostic step>
 """
 
 def count_message_tokens(message, enc):

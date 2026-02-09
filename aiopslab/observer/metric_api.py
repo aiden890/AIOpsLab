@@ -142,7 +142,14 @@ class PrometheusAPI:
         self.port = self.find_free_port()
         self.port_forward_process = None
         self.stop_event = threading.Event()
-        self.start_port_forward()
+
+        # Skip port forwarding for Docker-based deployments (static replayers)
+        # Prometheus is already accessible via Docker Compose port mapping
+        if namespace not in ["docker", "static-replayer"] and not namespace.startswith("static-"):
+            self.start_port_forward()
+        else:
+            print(f"Skipping kubectl port-forward for Docker-based namespace: {namespace}")
+
         self.client = PrometheusConnect(url, disable_ssl=True)
         self.namespace = namespace
         self.pod_list, self.service_list = self.initialize_pod_and_service_lists(
@@ -247,6 +254,13 @@ class PrometheusAPI:
 
     def initialize_pod_and_service_lists(self, custom_namespace=None):
         namespace = custom_namespace or monitor_config["namespace"]
+
+        # For Docker-based deployments, return empty lists
+        # Metrics are accessible directly without needing pod/service discovery
+        if namespace in ["docker", "static-replayer"] or namespace.startswith("static-"):
+            print(f"Using Docker-based deployment - skipping pod/service discovery")
+            return [], []
+
         v1 = client.CoreV1Api()
         pod_list = [
             pod

@@ -1,0 +1,41 @@
+{
+  "dataset_name": "OpenRCA Bank",
+  "dataset_type": "openrca",
+  "dataset_path": "/Users/gyuri/Documents/rcagent/AIOpsLab/openrca_dataset/Bank",
+  "namespace": "static-bank",
+
+  "telemetry": {
+    "enable_trace": true,
+    "enable_log": true,
+    "enable_metric": true
+  },
+
+  "query": {
+    "enable": true,
+    "query_file": "query.csv",
+    "record_file": "record.csv",
+    "task_identifier": "task_1"
+  },
+
+  "time_mapping": {
+    "mode": "realtime",
+    "anchor_strategy": "fault_start",
+    "simulation_start_time": null,
+    "history_duration_seconds": 1800,
+    "enable_bulk_history": true,
+    "time_offset_seconds": 0
+  },
+
+  "replay_config": {
+    "speed_factor": 1.0,
+    "loop": false
+  },
+
+  "data_mapping": {
+    "trace_files": ["trace_span.csv"],
+    "log_files": ["log_service.csv"],
+    "metric_files": ["metric_app.csv", "metric_container.csv"]
+  },
+
+  "use_docker_replayer": false
+}

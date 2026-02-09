@@ -1,0 +1,47 @@
+{
+  "dataset_name": "OpenRCA Market Cloudbed-1",
+  "dataset_type": "openrca",
+  "dataset_path": "/Users/gyuri/Documents/rcagent/AIOpsLab/openrca_dataset/Market/cloudbed-1",
+  "namespace": "static-market-cb1",
+
+  "telemetry": {
+    "enable_trace": true,
+    "enable_log": true,
+    "enable_metric": true
+  },
+
+  "query": {
+    "enable": true,
+    "query_file": "query.csv",
+    "record_file": "record.csv",
+    "task_identifier": "task_1"
+  },
+
+  "time_mapping": {
+    "mode": "realtime",
+    "anchor_strategy": "fault_start",
+    "simulation_start_time": null,
+    "history_duration_seconds": 1800,
+    "enable_bulk_history": true,
+    "time_offset_seconds": 0
+  },
+
+  "replay_config": {
+    "speed_factor": 1.0,
+    "loop": false
+  },
+
+  "data_mapping": {
+    "trace_files": ["trace_span.csv"],
+    "log_files": ["log_service.csv", "log_proxy.csv"],
+    "metric_files": [
+      "metric_service.csv",
+      "metric_container.csv",
+      "metric_node.csv",
+      "metric_runtime.csv",
+      "metric_mesh.csv"
+    ]
+  },
+
+  "use_docker_replayer": false
+}

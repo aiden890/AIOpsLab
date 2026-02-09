@@ -26,33 +26,25 @@ class DetectionTask(Task):
         self.actions = DetectionActions()
 
         self.task_desc = """\
-            You are an expert DevOps engineer assigned to detect anomalies in a deployed service.
-            
+            You are a DevOps engineer analyzing a service for potential anomalies.
+
             Service Details:
             {app_summary}
 
-            You will begin by analyzing the service's state and telemetry, and then submit your solution:
-            1. str: "Yes" or "No" to indicate whether there are anomalies detected
+            Your task is to analyze the service's state and telemetry, then provide your assessment:
+            - Response: "Yes" if anomalies are detected
+            - Response: "No" if the service appears healthy
             """
 
         self.instructions = """\
-            You will respond with one of the above APIs as your next action.
-            Please respond in the following format in a markdown code block:
-            ```\n<API_NAME>(<API_PARAM1>, <API_PARAM2> ...)\n```
+            Respond with API calls in the following format within markdown code blocks:
+            ```\n<API_NAME>(<PARAM1>, <PARAM2>, ...)\n```
 
-            For instance, if you want to list files in current directory, your response must be exactly:
-            
-            ```\nexec_shell("ls -l")\n```
+            When you have completed your analysis, submit your findings:
+            - If no anomalies were detected: ```\nsubmit(\"No\")\n```
+            - If anomalies were found: ```\nsubmit(\"Yes\")\n```
 
-            If you decide that there are no anomalies:
-
-            ```\nsubmit(\"No\")\n```
-
-            Or, if anomalies are found:
-
-            ```\nsubmit(\"Yes\")\n```
-
-            Please respond with only a single API call (a.k.a., action) per turn without any additional words, labels, or prefixes.
+            Provide one API call per response.
             """
 
     def get_task_description(self):
