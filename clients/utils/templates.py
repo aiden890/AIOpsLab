@@ -65,3 +65,19 @@ Finally, you will submit your solution for this task using the following API:
 Collaborate with your team to analyze the problem and suggest appropriate API calls.
 Do not execute commands. Suggest API calls in the specified format within markdown code blocks.
 """
+
+# Template for static replayer problems (no shell access, telemetry-only)
+STATIC_RCA_DOCS = """{prob_desc}
+
+You can query historical telemetry data using these APIs:
+
+{telemetry_apis}
+
+{submit_api}
+
+Your goal is to analyze the telemetry data to identify the root cause.
+
+Please respond at each step with:
+Thought: <your analysis>
+Action: <API call or solution>
+"""

@@ -360,3 +360,14 @@ aiopslab/observer/prometheus/prometheus/Chart.lock
 # Ignore customized config files
 aiopslab/config.yml
 scripts/ansible/inventory.yml
+
+
+# Gyuri
+acme_cluster_dataset/
+alibaba_cluster_dataset/
+.claude/
+openrca_dataset/
+openspec/
+results/
+tests/
+prompt/

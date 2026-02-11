@@ -1,0 +1,20 @@
+dataset:
+  namespace: Bank_test
+  path: /datasets
+  type: openrca
+simulation:
+  offset_minutes: 0
+  start_time_option: fault_time
+  timezone: Asia/Seoul
+telemetry:
+  enabled:
+  - trace
+  - log
+  - metric
+  history_window_minutes: 30
+  streaming:
+    batch_interval_seconds: 1
+    duration_minutes: 1
+    enabled: true
+time_mapping:
+  historical_fault_time: '2021-03-04T14:57:00'

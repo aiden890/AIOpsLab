@@ -1,0 +1,23 @@
+dataset:
+  namespace: Bank
+  path: /datasets
+  type: openrca
+output:
+  format: csv
+  path: /telemetry_output
+simulation:
+  offset_minutes: 0
+  start_time_option: fault_time
+telemetry:
+  enabled:
+  - trace
+  - log
+  - metric
+  history_window_minutes: 30
+  streaming:
+    enabled: true
+    speed: 1.0
+    streaming_window_minutes: 3
+time_mapping:
+  historical_fault_time: '2021-03-04T14:57:00'
+  simulation_start_time: '2026-02-10T16:22:38.928768'

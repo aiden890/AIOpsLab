@@ -1,0 +1,63 @@
+# OpenRCA Bank Dataset Configuration Template
+
+dataset:
+  type: openrca
+  namespace: Bank  # Base dataset name (Bank, Telecom, Market)
+  path: /datasets  # Path inside container (mounted from host)
+
+simulation:
+  # How to determine simulation start time:
+  # - 'fault_time': Use current time when container starts (in specified timezone)
+  # - 'absolute': Use specific time from absolute_start_time field
+  start_time_option: fault_time
+
+  # Timezone for interpreting current time when container starts (IANA timezone names)
+  # This is used to read current time in your timezone, then converted to UTC
+  # All operations, timestamps, and logs will be in UTC
+  # Examples: UTC, America/New_York, America/Los_Angeles, Europe/London,
+  #           Asia/Seoul, Asia/Shanghai, Asia/Tokyo
+  # Default: UTC
+  timezone: Asia/Seoul  # Read current time in KST, convert to UTC for all operations
+
+  # Offset from fault time to start simulation (in minutes)
+  # 0 = simulation starts at fault time
+  # -5 = simulation starts 5 minutes before fault
+  # 5 = simulation starts 5 minutes after fault
+  offset_minutes: 0
+
+  # For 'absolute' mode only: specific time to start simulation
+  # Format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)
+  # If no timezone suffix, uses 'timezone' field above
+  # absolute_start_time: "2026-02-11T10:00:00"
+
+time_mapping:
+  # Historical fault time from dataset (in China/UTC+8 for OpenRCA)
+  # Format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)
+  # From record.csv: 2021-03-04 14:57:00 (China time)
+  historical_fault_time: "2021-03-04T14:57:00"
+
+telemetry:
+  # Which telemetry types to replay
+  enabled: [trace, log, metric]
+
+  # Historical data window before simulation start (in minutes)
+  # This data is bulk-loaded in Phase 1
+  history_window_minutes: 30
+
+  streaming:
+    # Enable Phase 2 real-time streaming after history
+    enabled: true
+
+    # How long to stream data after simulation start (in minutes)
+    streaming_window_minutes: 30
+
+    # Streaming speed multiplier
+    # 1.0 = real-time, 2.0 = 2x speed, 0.5 = half speed
+    speed: 1.0
+
+    # Batch interval for writing streaming data (in seconds)
+    batch_interval_seconds: 1
+
+output:
+  # Output path inside container (mounted to host)
+  path: /telemetry_output

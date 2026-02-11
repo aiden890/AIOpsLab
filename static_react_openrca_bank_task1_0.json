@@ -1,0 +1,16 @@
+{
+  "success": false,
+  "evaluation": {
+    "time": {
+      "correct": false,
+      "error_minutes": 10.7,
+      "ground_truth": "2026-02-11T05:52:45",
+      "predicted": "2026-02-11T06:03:27",
+      "tolerance_minutes": 1.0
+    }
+  },
+  "metrics": {
+    "duration_seconds": 62.7981219291687
+  },
+  "feedback": "Time: 10.7min error"
+}

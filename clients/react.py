@@ -13,11 +13,11 @@ import tiktoken
 from aiopslab.orchestrator import Orchestrator
 from aiopslab.orchestrator.problems.registry import ProblemRegistry
 from clients.utils.llm import GPTClient
-from clients.utils.templates import DOCS
+from clients.utils.templates import DOCS, STATIC_RCA_DOCS
 
-RESP_INSTR = """DO NOT REPEAT ACTIONS! Respond with:
-Thought: <your thought on the previous output>
-Action: <your action towards mitigating>
+RESP_INSTR = """Please analyze the data and respond with:
+Thought: <your analysis of the information>
+Action: <next query or solution submission>
 """
 
 def count_message_tokens(message, enc):
@@ -73,10 +73,11 @@ class Agent:
             [f"{k}\n{v}" for k, v in apis.items()]
         )
 
-        self.system_message = DOCS.format(
+        # Use static RCA template if no shell access (safer for content filters)
+
+        self.system_message = STATIC_RCA_DOCS.format(
             prob_desc=problem_desc,
             telemetry_apis=stringify_apis(self.telemetry_apis),
-            shell_api=stringify_apis(self.shell_api),
             submit_api=stringify_apis(self.submit_api),
         )
 
@@ -96,7 +97,40 @@ class Agent:
         """
         self.history.append({"role": "user", "content": self._add_instr(input)})
         trimmed_history = trim_history_to_token_limit(self.history)
+
+        # Debug: Print only the latest user message (current step)
+        if trimmed_history and trimmed_history[-1]['role'] == 'user':
+            print("\n" + "="*80)
+            print(f"STEP INPUT:")
+            print("="*80)
+            print(trimmed_history[-1]['content'][:500] + ("..." if len(trimmed_history[-1]['content']) > 500 else ""))
+            print("="*80 + "\n")
+
         response = self.llm.run(trimmed_history)
+
+        # Debug: Print agent's response (Thought and Action)
+        print("\n" + "="*80)
+        print("AGENT RESPONSE:")
+        print("="*80)
+
+        # Extract and display Thought
+        import re
+        thought_match = re.search(r'Thought:\s*(.+?)(?=Action:|$)', response[0], re.DOTALL)
+        if thought_match:
+            thought = thought_match.group(1).strip()
+            print(f"Thought: {thought[:300]}{'...' if len(thought) > 300 else ''}")
+
+        # Extract and display Action
+        action_match = re.search(r'Action:\s*(.+?)(?=$)', response[0], re.DOTALL)
+        if action_match:
+            action = action_match.group(1).strip()
+            print(f"Action: {action[:300]}{'...' if len(action) > 300 else ''}")
+        else:
+            # If no structured format, show first 200 chars
+            print(f"Response: {response[0][:200]}{'...' if len(response[0]) > 200 else ''}")
+
+        print("="*80 + "\n")
+
         self.history.append({"role": "assistant", "content": response[0]})
         return response[0]
 

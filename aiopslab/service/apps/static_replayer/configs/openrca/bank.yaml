@@ -1,0 +1,28 @@
+# OpenRCA Bank Dataset Configuration
+
+dataset:
+  type: openrca
+  namespace: Bank
+  path: /datasets
+
+simulation:
+  start_time_option: fault_time
+  offset_minutes: 0  # Start at fault time
+
+time_mapping:
+  # Historical fault time from dataset (placeholder - will be overridden per task)
+  # This is required by replayer, actual value set dynamically per problem instance
+  historical_fault_time: "2021-03-04T14:57:00"
+
+telemetry:
+  enabled:
+    - trace
+    - log
+    - metric
+
+  history_window_minutes: 30  # Load 30 minutes of history before fault
+
+  streaming:
+    enabled: true
+    duration_minutes: 30  # Stream for 30 minutes after fault
+    batch_interval_seconds: 5  # Write every 5 seconds

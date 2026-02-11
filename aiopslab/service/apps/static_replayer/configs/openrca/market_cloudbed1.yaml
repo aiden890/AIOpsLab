@@ -1,0 +1,25 @@
+# OpenRCA Market Dataset Configuration (cloudbed-1)
+
+dataset:
+  type: openrca
+  namespace: Market/cloudbed-1
+  path: /datasets
+
+simulation:
+  start_time_option: fault_time
+  offset_minutes: 0  # Start at fault time
+
+# Time mapping will be set dynamically based on task
+
+telemetry:
+  enabled:
+    - trace
+    - log
+    - metric
+
+  history_window_minutes: 30  # Load 30 minutes of history before fault
+
+  streaming:
+    enabled: true
+    duration_minutes: 30  # Stream for 30 minutes after fault
+    batch_interval_seconds: 5  # Write every 5 seconds
