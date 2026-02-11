@@ -1,0 +1,14 @@
+{
+  "score": 0.0,
+  "passing_criteria": [],
+  "failing_criteria": [
+    "2021-03-04 14:57:00"
+  ],
+  "task_type": "task_1",
+  "difficulty": "easy",
+  "TTA": 42.44961357116699,
+  "success": false,
+  "steps": 30,
+  "in_tokens": 396997,
+  "out_tokens": 2379
+}

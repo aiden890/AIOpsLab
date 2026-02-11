@@ -6,6 +6,8 @@
 import time
 import uuid
 import json
+from pathlib import Path
+
 import wandb
 from pydantic import BaseModel
 
@@ -28,7 +30,7 @@ class Session:
         self.start_time = None
         self.end_time = None
         self.agent_name = None
-        self.results_dir = results_dir
+        self.results_dir = Path(results_dir) if isinstance(results_dir, str) else results_dir
 
     def set_problem(self, problem, pid=None):
         """Set the problem instance for the session.

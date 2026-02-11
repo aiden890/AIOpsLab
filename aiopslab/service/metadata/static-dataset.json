@@ -1,0 +1,6 @@
+{
+    "Name": "Static Dataset",
+    "Namespace": "static-dataset",
+    "Desc": "Serves static datasets (OpenRCA, Alibaba) as telemetry via Docker volumes",
+    "Docker Deploy Path": "static_dataset"
+}

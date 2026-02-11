@@ -1,0 +1,57 @@
+{
+  "dataset_name": "OpenRCA Market Cloudbed-2",
+  "dataset_type": "openrca",
+  "dataset_path": "aiopslab-applications/static_dataset/openrca/Market/cloudbed-2",
+  "namespace": "static-market-cb2",
+
+  "telemetry": {
+    "enable_trace": true,
+    "enable_log": true,
+    "enable_metric": true
+  },
+
+  "query": {
+    "enable": true,
+    "query_file": "query.csv",
+    "record_file": "record.csv",
+    "task_identifier": "task_1"
+  },
+
+  "time_mapping": {
+    "mode": "realtime",
+    "anchor_strategy": "fault_start",
+    "simulation_start_time": null,
+    "history_duration_seconds": 1800,
+    "enable_bulk_history": true,
+    "time_offset_seconds": 0
+  },
+
+  "replay": {
+    "pre_buffer_minutes": 30,
+    "post_buffer_minutes": 30,
+    "streaming_interval_seconds": 30,
+    "speed_factor": 1.0
+  },
+
+  "data_mapping": {
+    "trace_files": ["trace_span.csv"],
+    "log_files": ["log_service.csv", "log_proxy.csv"],
+    "metric_files": [
+      "metric_service.csv",
+      "metric_container.csv",
+      "metric_node.csv",
+      "metric_runtime.csv",
+      "metric_mesh.csv"
+    ]
+  },
+
+  "services": [
+    "adservice", "adservice2", "cartservice", "cartservice2",
+    "checkoutservice", "checkoutservice2", "currencyservice", "currencyservice2",
+    "emailservice", "frontend", "paymentservice",
+    "productcatalogservice", "recommendationservice",
+    "redis-cart", "shippingservice"
+  ],
+
+  "use_docker_replayer": false
+}

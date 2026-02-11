@@ -1,0 +1,52 @@
+{
+  "dataset_name": "OpenRCA Bank",
+  "dataset_type": "openrca",
+  "dataset_path": "aiopslab-applications/static_dataset/openrca/Bank",
+  "namespace": "static-bank",
+
+  "telemetry": {
+    "enable_trace": true,
+    "enable_log": true,
+    "enable_metric": true
+  },
+
+  "query": {
+    "enable": true,
+    "query_file": "query.csv",
+    "record_file": "record.csv",
+    "task_identifier": "task_1"
+  },
+
+  "time_mapping": {
+    "mode": "realtime",
+    "anchor_strategy": "fault_start",
+    "simulation_start_time": null,
+    "history_duration_seconds": 1800,
+    "enable_bulk_history": true,
+    "time_offset_seconds": 0
+  },
+
+  "replay": {
+    "pre_buffer_minutes": 30,
+    "post_buffer_minutes": 30,
+    "streaming_interval_seconds": 30,
+    "speed_factor": 1.0
+  },
+
+  "data_mapping": {
+    "trace_files": ["trace_span.csv"],
+    "log_files": ["log_service.csv"],
+    "metric_files": ["metric_app.csv", "metric_container.csv"]
+  },
+
+  "services": [
+    "apache01", "apache02",
+    "Mysql01", "Mysql02",
+    "Tomcat01", "Tomcat02", "Tomcat03", "Tomcat04",
+    "Redis01", "Redis02",
+    "dockerA1", "dockerA2", "dockerB1", "dockerB2",
+    "IG01", "IG02", "MG01", "MG02"
+  ],
+
+  "use_docker_replayer": false
+}

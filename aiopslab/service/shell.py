@@ -97,11 +97,12 @@ class Shell:
             ssh_client.close()
 
     @staticmethod
-    def docker_exec(container_name: str, command: str, timeout=30):
+    def docker_exec(container_name: str, command: str, timeout=30, user=None):
         """Execute a command inside a running Docker container."""
         escaped_command = command.replace('"', '\\"')
-        
-        docker_command = f'docker exec {container_name} sh -c "{escaped_command}"'
+
+        user_flag = f" -u {user}" if user else ""
+        docker_command = f'docker exec{user_flag} {container_name} sh -c "{escaped_command}"'
 
         try:
             out = subprocess.run(
