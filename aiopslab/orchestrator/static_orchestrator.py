@@ -3,8 +3,17 @@
 No K8s, no OpenEBS, no Prometheus. Uses Docker Compose for data containers only.
 """
 
+import os
+import shutil
+
 from aiopslab.orchestrator.base import BaseOrchestrator
 from aiopslab.orchestrator.static_problems.registry import StaticProblemRegistry
+
+STATIC_OUTPUT_DIRS = [
+    "static_logs_output",
+    "static_metrics_output",
+    "static_traces_output",
+]
 
 
 class StaticOrchestrator(BaseOrchestrator):
@@ -19,5 +28,9 @@ class StaticOrchestrator(BaseOrchestrator):
         pass
 
     def _teardown_environment(self, prob):
-        """No K8s teardown needed for static datasets."""
-        pass
+        """Clean up temporary output directories created by get_* actions."""
+        for dirname in STATIC_OUTPUT_DIRS:
+            dirpath = os.path.join(os.getcwd(), dirname)
+            if os.path.isdir(dirpath):
+                shutil.rmtree(dirpath)
+                print(f"Cleaned up: {dirpath}")

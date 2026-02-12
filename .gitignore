@@ -367,3 +367,11 @@ acme_cluster_dataset/
 alibaba_cluster_dataset/
 .claude/
 openrca_dataset/
+
+
+# Aiden
+playground_aiden/
+results/
+static_logs_output/
+static_metrics_output/
+static_traces_output/
