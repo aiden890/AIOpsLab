@@ -71,6 +71,10 @@ class Agent:
         self.history = []
         self.llm = GPTClient(auth_type="azure_key")
 
+    def get_model_name(self):
+        """Return the model name used by this agent."""
+        return self.llm.get_model_name()
+
     def init_context(self, problem_desc: str, instructions: str, apis: str):
         self.shell_api = self._filter_dict(apis, lambda k, _: "exec_shell" in k)
         self.submit_api = self._filter_dict(apis, lambda k, _: "submit" in k)
