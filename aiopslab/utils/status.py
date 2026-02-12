@@ -113,16 +113,22 @@ class SessionPrint:
             self._log(f"Step {self.step_count}", f"Step {self.step_count}")
             self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
 
-            # Parse Thought and Action from the response
+            # Try to parse as ReAct format
             thought, action_text = self._parse_react_response(action)
 
-            if thought:
-                self._log("💭 Thought:", f"{Fore.YELLOW}💭 Thought:{Style.RESET_ALL}")
-                self._log(f"   {thought}\n")
+            # If ReAct format detected (has thought or action)
+            if thought or action_text:
+                if thought:
+                    self._log("💭 Thought:", f"{Fore.YELLOW}💭 Thought:{Style.RESET_ALL}")
+                    self._log(f"   {thought}\n")
 
-            if action_text:
-                self._log("⚡ Action:", f"{Fore.GREEN}⚡ Action:{Style.RESET_ALL}")
-                self._log(f"   {action_text}")
+                if action_text:
+                    self._log("⚡ Action:", f"{Fore.GREEN}⚡ Action:{Style.RESET_ALL}")
+                    self._log(f"   {action_text}")
+            else:
+                # Non-ReAct agent: log raw response
+                self._log("🤖 Agent Response:", f"{Fore.GREEN}🤖 Agent Response:{Style.RESET_ALL}")
+                self._log(f"   {action}")
 
     def service(self, response):
         # Always print step completion to terminal
@@ -193,11 +199,15 @@ class SessionPrint:
         self._log("=" * 60 + "\n", f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
 
     def _parse_react_response(self, text):
-        """Parse ReAct format response into thought and action components."""
-        import re
+        """Parse ReAct format response into thought and action components.
+        Returns empty strings if not in ReAct format."""
 
         thought = ""
         action = ""
+
+        # Check if text contains ReAct markers (case-insensitive)
+        if 'thought:' not in text.lower() and 'action:' not in text.lower():
+            return "", ""
 
         # Extract thought section
         thought_match = re.search(r'Thought:\s*(.*?)(?=\nAction:|$)', text, re.IGNORECASE | re.DOTALL)
@@ -207,14 +217,6 @@ class SessionPrint:
         # Extract action section - only content within code blocks
         action_match = re.search(r'Action:\s*(.*?)(?=$|\n(?:Thought|Action|Observation):)', text, re.IGNORECASE | re.DOTALL)
         if action_match:
-            action_section = action_match.group(1).strip()
-
-            # Extract only the code block content
-            code_block_match = re.search(r'```(?:\w+)?\s*(.*?)\s*```', action_section, re.DOTALL)
-            if code_block_match:
-                action = code_block_match.group(1).strip()
-            else:
-                # Fallback: use the first line if no code block
-                action = action_section.split('\n')[0].strip()
+            action = action_match.group(1).strip()
 
         return thought.strip(), action.strip()
