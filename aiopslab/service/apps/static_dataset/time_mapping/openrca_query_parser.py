@@ -11,9 +11,12 @@ Extracts time ranges from instruction text using regex patterns.
 from .base_query_parser import BaseQueryParser, QueryResult
 import pandas as pd
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 from pathlib import Path
+
+# OpenRCA dataset timestamps are in UTC+8 (Asia/Shanghai)
+_UTC_PLUS_8 = timezone(timedelta(hours=8))
 
 
 class OpenRCAQueryParser(BaseQueryParser):
@@ -127,16 +130,16 @@ class OpenRCAQueryParser(BaseQueryParser):
                 start_dt = datetime.strptime(
                     f"{date_obj.date()} {start_time_str}",
                     "%Y-%m-%d %H:%M"
-                )
+                ).replace(tzinfo=_UTC_PLUS_8)
                 end_dt = datetime.strptime(
                     f"{date_obj.date()} {end_time_str}",
                     "%Y-%m-%d %H:%M"
-                )
+                ).replace(tzinfo=_UTC_PLUS_8)
 
             elif pattern_type == 'full_datetime':
                 # "2021-03-04 14:30:00" + "2021-03-04 15:00:00"
-                start_dt = datetime.strptime(groups[0], "%Y-%m-%d %H:%M:%S")
-                end_dt = datetime.strptime(groups[1], "%Y-%m-%d %H:%M:%S")
+                start_dt = datetime.strptime(groups[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_UTC_PLUS_8)
+                end_dt = datetime.strptime(groups[1], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_UTC_PLUS_8)
 
             elif pattern_type == 'date_time_range':
                 # "2022-03-20" + "09:00" + "10:00"
@@ -144,8 +147,8 @@ class OpenRCAQueryParser(BaseQueryParser):
                 start_time_str = groups[1]
                 end_time_str = groups[2]
 
-                start_dt = datetime.strptime(f"{date_str} {start_time_str}", "%Y-%m-%d %H:%M")
-                end_dt = datetime.strptime(f"{date_str} {end_time_str}", "%Y-%m-%d %H:%M")
+                start_dt = datetime.strptime(f"{date_str} {start_time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=_UTC_PLUS_8)
+                end_dt = datetime.strptime(f"{date_str} {end_time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=_UTC_PLUS_8)
 
             elif pattern_type == 'time_first':
                 # "14:30" + "15:00" + "March 4, 2021"
@@ -158,11 +161,11 @@ class OpenRCAQueryParser(BaseQueryParser):
                 start_dt = datetime.strptime(
                     f"{date_obj.date()} {start_time_str}",
                     "%Y-%m-%d %H:%M"
-                )
+                ).replace(tzinfo=_UTC_PLUS_8)
                 end_dt = datetime.strptime(
                     f"{date_obj.date()} {end_time_str}",
                     "%Y-%m-%d %H:%M"
-                )
+                ).replace(tzinfo=_UTC_PLUS_8)
 
             return {
                 'start': int(start_dt.timestamp()),
@@ -186,10 +189,10 @@ class OpenRCAQueryParser(BaseQueryParser):
             min_ts = self.record_df['timestamp'].min()
             max_ts = self.record_df['timestamp'].max()
         else:
-            # Parse datetime strings
+            # Parse datetime strings as UTC+8
             datetimes = pd.to_datetime(self.record_df['datetime'])
-            min_ts = datetimes.min().timestamp()
-            max_ts = datetimes.max().timestamp()
+            min_ts = datetimes.min().tz_localize(_UTC_PLUS_8).timestamp()
+            max_ts = datetimes.max().tz_localize(_UTC_PLUS_8).timestamp()
 
         # Expand time range to 30 minutes before/after faults
         min_ts -= 1800  # 30 minutes before
@@ -198,8 +201,8 @@ class OpenRCAQueryParser(BaseQueryParser):
         return {
             'start': int(min_ts),
             'end': int(max_ts),
-            'start_str': datetime.fromtimestamp(min_ts).strftime("%Y-%m-%d %H:%M:%S"),
-            'end_str': datetime.fromtimestamp(max_ts).strftime("%Y-%m-%d %H:%M:%S"),
+            'start_str': datetime.fromtimestamp(min_ts, tz=_UTC_PLUS_8).strftime("%Y-%m-%d %H:%M:%S"),
+            'end_str': datetime.fromtimestamp(max_ts, tz=_UTC_PLUS_8).strftime("%Y-%m-%d %H:%M:%S"),
             'duration': int(max_ts - min_ts)
         }
 
@@ -212,13 +215,13 @@ class OpenRCAQueryParser(BaseQueryParser):
             if 'timestamp' in row:
                 ts = row['timestamp']
             else:
-                ts = datetime.strptime(row['datetime'], "%Y-%m-%d %H:%M:%S").timestamp()
+                ts = datetime.strptime(row['datetime'], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_UTC_PLUS_8).timestamp()
 
             # Only include faults within time range
             if time_range['start'] <= ts <= time_range['end']:
                 faults.append({
                     'timestamp': int(ts),
-                    'datetime': row.get('datetime', datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")),
+                    'datetime': row.get('datetime', datetime.fromtimestamp(ts, tz=_UTC_PLUS_8).strftime("%Y-%m-%d %H:%M:%S")),
                     'level': row.get('level', 'unknown'),
                     'component': row['component'],
                     'reason': row.get('reason', 'unknown')

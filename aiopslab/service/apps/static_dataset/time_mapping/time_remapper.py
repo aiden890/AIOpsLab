@@ -8,9 +8,12 @@ Maps original dataset timestamps to simulation timestamps.
 Supports different modes (realtime, manual, query_based) and anchor strategies.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Dict
 from .base_query_parser import QueryResult
+
+# OpenRCA dataset timestamps are in UTC+8
+_UTC_PLUS_8 = timezone(timedelta(hours=8))
 
 
 class TimeRemapper:
@@ -111,9 +114,9 @@ Replay Summary (no timestamp conversion)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Anchor Strategy: {m['anchor_strategy']}
 
-Init Window : {datetime.fromtimestamp(m['init_start_original']).strftime(fmt)} ~ {datetime.fromtimestamp(m['init_end_original']).strftime(fmt)}
-Fault Anchor: {datetime.fromtimestamp(m['anchor_original']).strftime(fmt)}
-Fault Window: {datetime.fromtimestamp(m['fault_start']).strftime(fmt)} ~ {datetime.fromtimestamp(m['fault_end']).strftime(fmt)}
+Init Window : {datetime.fromtimestamp(m['init_start_original'], tz=_UTC_PLUS_8).strftime(fmt)} ~ {datetime.fromtimestamp(m['init_end_original'], tz=_UTC_PLUS_8).strftime(fmt)}
+Fault Anchor: {datetime.fromtimestamp(m['anchor_original'], tz=_UTC_PLUS_8).strftime(fmt)}
+Fault Window: {datetime.fromtimestamp(m['fault_start'], tz=_UTC_PLUS_8).strftime(fmt)} ~ {datetime.fromtimestamp(m['fault_end'], tz=_UTC_PLUS_8).strftime(fmt)}
 
 Pre-buffer: {m['pre_buffer']//60} min | Post-buffer: {m['post_buffer']//60} min
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
