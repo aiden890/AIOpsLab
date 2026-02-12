@@ -54,7 +54,7 @@ class StaticTaskActions:
             service (str, optional): The service name to filter by. If omitted, returns all logs.
 
         Returns:
-            str: Path to the directory where logs are saved.
+            str: Path to the saved log file (CSV format).
         """
         df = self.static_app.fetch_logs_df(namespace, service)
         if df.empty:
@@ -63,9 +63,10 @@ class StaticTaskActions:
 
         save_dir = os.path.join(os.getcwd(), "static_logs_output")
         os.makedirs(save_dir, exist_ok=True)
-        df.to_csv(os.path.join(save_dir, "logs.csv"), index=False)
+        file_path = os.path.join(save_dir, "logs.csv")
+        df.to_csv(file_path, index=False)
 
-        return save_dir
+        return file_path
 
     @read
     def get_metrics(self, namespace: str, duration: int = 5) -> str:
@@ -77,7 +78,7 @@ class StaticTaskActions:
             duration (int): Minutes of data to retrieve.
 
         Returns:
-            str: Path to the directory where metrics are saved.
+            str: Path to the saved metrics file (CSV format).
         """
         df = self.static_app.fetch_metrics_df(namespace, duration)
         if df.empty:
@@ -85,10 +86,11 @@ class StaticTaskActions:
 
         save_dir = os.path.join(os.getcwd(), "static_metrics_output")
         os.makedirs(save_dir, exist_ok=True)
-        df.to_csv(os.path.join(save_dir, "metrics.csv"), index=False)
+        file_path = os.path.join(save_dir, "metrics.csv")
+        df.to_csv(file_path, index=False)
 
-        print(f"Metrics data saved to: {save_dir}")
-        return save_dir
+        print(f"Metrics data saved to: {file_path}")
+        return file_path
 
     @read
     def get_traces(self, namespace: str, duration: int = 5) -> str:
@@ -100,7 +102,7 @@ class StaticTaskActions:
             duration (int): Minutes of data to retrieve.
 
         Returns:
-            str: Path to the directory where traces are saved.
+            str: Path to the saved traces file (CSV format).
         """
         df = self.static_app.fetch_traces_df(namespace, duration)
         if df.empty:
@@ -108,10 +110,11 @@ class StaticTaskActions:
 
         save_dir = os.path.join(os.getcwd(), "static_traces_output")
         os.makedirs(save_dir, exist_ok=True)
-        df.to_csv(os.path.join(save_dir, "traces.csv"), index=False)
+        file_path = os.path.join(save_dir, "traces.csv")
+        df.to_csv(file_path, index=False)
 
-        print(f"Trace data saved to: {save_dir}")
-        return save_dir
+        print(f"Trace data saved to: {file_path}")
+        return file_path
 
     # ----- read_* : read a saved local CSV file → return data -----
 
