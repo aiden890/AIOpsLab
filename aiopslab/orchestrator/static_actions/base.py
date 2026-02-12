@@ -201,5 +201,5 @@ class StaticTaskActions:
                 return error
 
         result = Shell.local_exec(command, timeout=timeout)
-        print(result)
+
         return result
