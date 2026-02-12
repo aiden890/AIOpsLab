@@ -129,6 +129,10 @@ class BaseOrchestrator:
         action, env_response, results = "", "", {}
         self.session.start()
 
+        # Initialize log file for session
+        log_filepath = self.session.get_filepath(file_type="log")
+        self.sprint.init_log_file(str(log_filepath))
+
         try:
             for step in range(max_steps):
                 action = await self.ask_agent(action_instr)
@@ -168,6 +172,9 @@ class BaseOrchestrator:
             atexit.unregister(exit_cleanup_fault)
 
         self.session.problem.app.cleanup()
+
+        # Close log file
+        self.sprint.close_log_file()
 
         # Subclass-specific teardown
         self._teardown_environment(self.session.problem)

@@ -5,6 +5,9 @@
 
 from enum import Enum
 from colorama import Fore, Style
+from datetime import datetime
+from pathlib import Path
+import re
 
 from aiopslab.config import Config
 from aiopslab.paths import BASE_DIR
@@ -31,75 +34,109 @@ class ResponseParsingError(Exception):
 
 class SessionPrint:
     def __init__(self):
-        self.enable_printing = config.get("print_session")
+        self.enable_terminal = config.get("print_session_terminal", True)
+        self.enable_file = config.get("print_session_file", True)
         self.step_count = 0
+        self.log_file = None
+        self.log_filepath = None
+
+    def init_log_file(self, filepath):
+        """Initialize log file for session output."""
+        if self.enable_file:
+            self.log_filepath = filepath
+            # Create parent directories if needed
+            Path(filepath).parent.mkdir(parents=True, exist_ok=True)
+            self.log_file = open(filepath, 'w', encoding='utf-8')
+            self._log(f"Session log started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+
+    def close_log_file(self):
+        """Close the log file."""
+        if self.log_file:
+            self._log(f"\nSession log ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            self.log_file.close()
+            self.log_file = None
+
+    def _log(self, text, colored_text=None):
+        """Write to terminal and/or file."""
+        # Write to terminal with colors
+        if self.enable_terminal:
+            print(colored_text if colored_text else text)
+
+        # Write to file without colors (strip ANSI codes)
+        if self.enable_file and self.log_file:
+            # Remove ANSI color codes for file output
+            
+            clean_text = re.sub(r'\x1b\[[0-9;]*m', '', str(colored_text if colored_text else text))
+            self.log_file.write(clean_text + '\n')
+            self.log_file.flush()
 
     def problem_init(self, problem_desc, instructions, apis=None):
         """Print initial problem setup."""
-        if self.enable_printing:
-            print(f"\n{Fore.MAGENTA}{'='*60}")
-            print(f"🎯 Problem Initialization")
-            print(f"{'='*60}{Style.RESET_ALL}\n")
+        if self.enable_terminal or self.enable_file:
+            self._log("=" * 60, f"\n{Fore.MAGENTA}{'='*60}")
+            self._log("🎯 Problem Initialization", f"🎯 Problem Initialization")
+            self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}\n")
 
-            print(f"{Fore.CYAN}📋 Problem Description:{Style.RESET_ALL}")
-            print(f"{problem_desc}\n")
+            self._log("\n📋 Problem Description:", f"{Fore.CYAN}📋 Problem Description:{Style.RESET_ALL}")
+            self._log(problem_desc + "\n")
 
-            print(f"{Fore.CYAN}📝 Instructions:{Style.RESET_ALL}")
-            print(f"{instructions}\n")
+            self._log("📝 Instructions:", f"{Fore.CYAN}📝 Instructions:{Style.RESET_ALL}")
+            self._log(instructions + "\n")
 
             if apis:
-                print(f"{Fore.CYAN}🔧 Available APIs:{Style.RESET_ALL}")
+                self._log("🔧 Available APIs:", f"{Fore.CYAN}🔧 Available APIs:{Style.RESET_ALL}")
                 api_list = list(apis.keys())
                 for i, api in enumerate(api_list, 1):
-                    print(f"  {i}. {api}")
-                print(f"\n{Fore.YELLOW}Total APIs available: {len(api_list)}{Style.RESET_ALL}")
+                    self._log(f"  {i}. {api}")
+                self._log(f"\nTotal APIs available: {len(api_list)}", f"\n{Fore.YELLOW}Total APIs available: {len(api_list)}{Style.RESET_ALL}")
 
-            print(f"\n{Fore.MAGENTA}{'='*60}")
-            print(f"Starting Agent Execution")
-            print(f"{'='*60}{Style.RESET_ALL}\n")
+            self._log("\n" + "=" * 60, f"\n{Fore.MAGENTA}{'='*60}")
+            self._log("Starting Agent Execution", f"Starting Agent Execution")
+            self._log("=" * 60 + "\n", f"{'='*60}{Style.RESET_ALL}\n")
 
     def agent(self, action):
-        if self.enable_printing:
+        if self.enable_terminal or self.enable_file:
             self.step_count += 1
-            print(f"\n{Fore.CYAN}{'='*60}")
-            print(f"Step {self.step_count}")
-            print(f"{'='*60}{Style.RESET_ALL}")
+            self._log("\n" + "=" * 60, f"\n{Fore.CYAN}{'='*60}")
+            self._log(f"Step {self.step_count}", f"Step {self.step_count}")
+            self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
 
             # Parse Thought and Action from the response
             thought, action_text = self._parse_react_response(action)
 
             if thought:
-                print(f"{Fore.YELLOW}💭 Thought:{Style.RESET_ALL}")
-                print(f"   {thought}\n")
+                self._log("💭 Thought:", f"{Fore.YELLOW}💭 Thought:{Style.RESET_ALL}")
+                self._log(f"   {thought}\n")
 
             if action_text:
-                print(f"{Fore.GREEN}⚡ Action:{Style.RESET_ALL}")
-                print(f"   {action_text}")
+                self._log("⚡ Action:", f"{Fore.GREEN}⚡ Action:{Style.RESET_ALL}")
+                self._log(f"   {action_text}")
 
     def service(self, response):
-        if self.enable_printing:
-            print(f"\n{Fore.BLUE}📋 Observation:{Style.RESET_ALL}")
+        if self.enable_terminal or self.enable_file:
+            self._log("\n📋 Observation:", f"\n{Fore.BLUE}📋 Observation:{Style.RESET_ALL}")
             # Convert to string if it's not already
             response_str = str(response) if not isinstance(response, str) else response
             # Truncate very long responses for readability
             if len(response_str) > 2000:
-                print(f"   {response_str[:2000]}...")
-                print(f"   {Fore.YELLOW}[Response truncated - {len(response_str)} total chars]{Style.RESET_ALL}")
+                self._log(f"   {response_str[:2000]}...")
+                self._log(f"   [Response truncated - {len(response_str)} total chars]",
+                         f"   {Fore.YELLOW}[Response truncated - {len(response_str)} total chars]{Style.RESET_ALL}")
             else:
-                print(f"   {response_str}")
-            print(f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}\n")
+                self._log(f"   {response_str}")
+            self._log("-" * 60 + "\n", f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}\n")
 
     def result(self, results):
-        print(f"\n{Fore.MAGENTA}{'='*60}")
-        print(f"📊 Results:")
-        print(f"{'='*60}{Style.RESET_ALL}")
-        print(f"{results}")
+        self._log("\n" + "=" * 60, f"\n{Fore.MAGENTA}{'='*60}")
+        self._log("📊 Results:", f"📊 Results:")
+        self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
+        self._log(f"{results}")
 
     def registry_info(self, registry):
         """Print static problem registry information."""
-        print(f"\n{Fore.CYAN}{'='*60}")
-        print(f"📚 Static Problem Registry")
-        print(f"{'='*60}{Style.RESET_ALL}\n")
+        self._log("\n" + "=" * 60, f"\n{Fore.CYAN}{'='*60}")
+        self._log("📚 Static Problem Registry", f"📚 Static Problem Registry")
+        self._log("=" * 60 + "\n", f"{'='*60}{Style.RESET_ALL}\n")
 
         # Group problems by dataset
         datasets = {}
@@ -118,15 +155,16 @@ class SessionPrint:
                     task_type = parts[2]  # e.g., "task_1"
                     task_counts[task_type] = task_counts.get(task_type, 0) + 1
 
-            print(f"{Fore.GREEN}📂 {dataset}:{Style.RESET_ALL}")
-            print(f"   Total: {len(pids)} problems")
-            print(f"   Task breakdown:")
+            self._log(f"📂 {dataset}:", f"{Fore.GREEN}📂 {dataset}:{Style.RESET_ALL}")
+            self._log(f"   Total: {len(pids)} problems")
+            self._log(f"   Task breakdown:")
             for task_type, count in sorted(task_counts.items()):
-                print(f"      • {task_type}: {count} problems")
-            print()
+                self._log(f"      • {task_type}: {count} problems")
+            self._log("")
 
-        print(f"{Fore.YELLOW}✅ Total problems in registry: {len(registry.PROBLEM_REGISTRY)}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
+        self._log(f"✅ Total problems in registry: {len(registry.PROBLEM_REGISTRY)}",
+                 f"{Fore.YELLOW}✅ Total problems in registry: {len(registry.PROBLEM_REGISTRY)}{Style.RESET_ALL}")
+        self._log("=" * 60 + "\n", f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}\n")
 
     def _parse_react_response(self, text):
         """Parse ReAct format response into thought and action components."""
