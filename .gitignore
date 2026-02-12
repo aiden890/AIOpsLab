@@ -367,6 +367,10 @@ acme_cluster_dataset/
 alibaba_cluster_dataset/
 .claude/
 openrca_dataset/
+openspec/
+prompt/
+results/
+tests/
 
 
 # Aiden
