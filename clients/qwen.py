@@ -15,6 +15,10 @@ class QwenAgent:
         self.history = []
         self.llm = QwenClient()
 
+    def get_model_name(self):
+        """Return the model name used by this agent."""
+        return self.llm.get_model_name()
+
     def init_context(self, problem_desc: str, instructions: str, apis: str):
         """Initialize the context for the agent."""
 

@@ -65,7 +65,6 @@ class StaticTaskActions:
         os.makedirs(save_dir, exist_ok=True)
         df.to_csv(os.path.join(save_dir, "logs.csv"), index=False)
 
-        print(f"Log data saved to: {save_dir}")
         return save_dir
 
     @read
