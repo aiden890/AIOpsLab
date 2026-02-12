@@ -33,6 +33,11 @@ class BaseOrchestrator:
         """Register the agent for the current session."""
         self.agent = agent
         self.agent_name = name
+        # Get model name from agent if available
+        if hasattr(agent, 'get_model_name'):
+            self.model_name = agent.get_model_name()
+        else:
+            self.model_name = "model"
 
     async def ask_agent(self, input):
         """Ask the agent for the next action given the current context."""
@@ -91,6 +96,7 @@ class BaseOrchestrator:
         deployment = self.probs.get_problem_deployment(problem_id)
         self.session.set_problem(prob, pid=problem_id)
         self.session.set_agent(self.agent_name)
+        self.session.set_model(self.model_name)
 
         # Subclass-specific environment setup
         self._setup_environment(prob, deployment)
