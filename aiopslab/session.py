@@ -31,6 +31,7 @@ class Session:
         self.start_time = None
         self.end_time = None
         self.agent_name = None
+        self.model_name = None
         self.results_dir = Path(results_dir) if isinstance(results_dir, str) else results_dir
 
     def set_problem(self, problem, pid=None):
@@ -66,6 +67,14 @@ class Session:
             agent_name (str): The name of the agent.
         """
         self.agent_name = agent_name
+
+    def set_model(self, model_name):
+        """Set the model name for the session.
+
+        Args:
+            model_name (str): The name of the LLM model.
+        """
+        self.model_name = model_name
 
     def add(self, item):
         """Add an item into the session history.
@@ -138,9 +147,10 @@ class Session:
         save_dir = results_dir / dataset / agent
         save_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create filename: {task&index}_{timestamp}.json
+        # Create filename: {model}_{task}_{timestamp}.json
         timestamp = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M")
-        filename = f"{task}_{timestamp}.json"
+        model = self.model_name.replace("/", "-") if self.model_name else "unknown"
+        filename = f"{model}_{task}_{timestamp}.json"
 
         filepath = save_dir / filename
 
