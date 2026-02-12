@@ -7,6 +7,7 @@ import time
 import uuid
 import json
 from pathlib import Path
+from datetime import datetime
 
 import wandb
 from pydantic import BaseModel
@@ -118,11 +119,35 @@ class Session:
 
     def to_json(self):
         """Save the session to a JSON file."""
-        results_dir = self.results_dir if self.results_dir else RESULTS_DIR
-        results_dir.mkdir(parents=True, exist_ok=True)
 
-        with open(results_dir / f"{self.session_id}_{self.start_time}.json", "w") as f:
+
+        results_dir = self.results_dir if self.results_dir else RESULTS_DIR
+
+        # Parse problem ID to extract dataset and task info
+        # Example pid: "openrca_bank-task_1-0" -> dataset: "openrca_bank"
+        agent = self.agent_name or "agent"
+        pid = self.pid or "unknown"
+
+        # Extract dataset from pid (first part before first hyphen)
+        if '-' in pid:
+            dataset,task = pid.split('-', maxsplit=1)  # e.g., "openrca_bank", "task_1"
+        else:
+            dataset,task = "unknown", "unknown"
+
+        # Create directory structure: dataset/agent/
+        save_dir = results_dir / dataset / agent
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create filename: {task&index}_{timestamp}.json
+        timestamp = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M")
+        filename = f"{task}_{timestamp}.json"
+
+        filepath = save_dir / filename
+
+        with open(filepath, "w") as f:
             json.dump(self.to_dict(), f, indent=4)
+
+        return str(filepath)
 
     def to_wandb(self):
         """Log the session to Weights & Biases."""
