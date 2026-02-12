@@ -18,7 +18,6 @@ Usage:
 
 import argparse
 import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -150,14 +149,14 @@ if __name__ == "__main__":
             problem_desc, instructs, apis = orchestrator.init_problem(pid)
             agent.init_context(problem_desc, instructs, apis)
 
+            # Print initial problem setup
+            orchestrator.sprint.problem_init(problem_desc, instructs, apis)
+
             full_output = asyncio.run(orchestrator.start_problem(max_steps=args.max_steps))
             results = full_output.get("results", {})
 
-            filename = results_dir / f"react_{pid}.json"
-            with open(filename, "w") as f:
-                json.dump(results, f, indent=2)
-
-            print(f"\nResults saved: {filename}")
+            # Session already saved with descriptive name
+            print(f"\nSession saved by orchestrator")
             print(f"Score: {results.get('score', 'N/A')}")
             print(f"Success: {results.get('success', 'N/A')}")
 
