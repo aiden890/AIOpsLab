@@ -53,14 +53,12 @@ class OpenRCATask(Task):
 
             {instruction}
 
-            Your workspace is /agent/. Telemetry data is at /agent/telemetry/{namespace}/:
-              - logs/     : log CSV files
-              - metrics/  : metric CSV files
-              - traces/   : trace CSV files
-            Use the provided APIs or exec_shell to explore these files.
-
-            IMPORTANT: When calling APIs, use namespace="{namespace}".
-            For get_logs(), you can optionally filter by service name (e.g., get_logs("{namespace}", "Mysql02")).
+            How to access telemetry data:
+            Step 1 - Fetch: Use get_logs/get_metrics/get_traces to save data locally.
+              e.g., get_logs("{namespace}") or get_logs("{namespace}", "<service>")
+            Step 2 - Read or Filter:
+              - read_logs/read_metrics/read_traces("<path>/file.csv") → returns full file contents
+              - exec_shell("grep <pattern> <path>/file.csv") → filtered results only
 
             Submit your root cause analysis as a JSON dict. Each root cause should be
             a numbered key ("1", "2", ...) with the relevant fields:

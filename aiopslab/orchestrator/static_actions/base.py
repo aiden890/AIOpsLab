@@ -181,7 +181,8 @@ class StaticTaskActions:
     @action
     def exec_shell(self, command: str, timeout: int = 30) -> str:
         """
-        Execute a shell command inside the dataset's Docker container.
+        Execute a shell command on the host machine.
+        Use this to process files saved by get_logs/get_metrics/get_traces.
 
         Args:
             command (str): The command to execute.
@@ -199,12 +200,6 @@ class StaticTaskActions:
             if pattern in command:
                 return error
 
-        if isinstance(self.static_app, DockerStaticApp):
-            result = Shell.docker_exec(
-                self.static_app.container_name, command,
-                timeout=timeout, user="agent",
-            )
-        else:
-            result = Shell.local_exec(command, timeout=timeout)
+        result = Shell.local_exec(command, timeout=timeout)
         print(result)
         return result
