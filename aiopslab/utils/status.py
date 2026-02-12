@@ -47,6 +47,10 @@ class SessionPrint:
             # Create parent directories if needed
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
             self.log_file = open(filepath, 'w', encoding='utf-8')
+
+            # Always print log file path to terminal
+            print(f"{Fore.CYAN}📝 Session log:{Style.RESET_ALL} {filepath}")
+
             self._log(f"Session log started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 
     def close_log_file(self):
@@ -54,6 +58,10 @@ class SessionPrint:
         if self.log_file:
             self._log(f"\nSession log ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             self.log_file.close()
+
+            # Always print completion message to terminal
+            print(f"{Fore.CYAN}📝 Session log saved:{Style.RESET_ALL} {self.log_filepath}")
+
             self.log_file = None
 
     def _log(self, text, colored_text=None):
@@ -95,8 +103,12 @@ class SessionPrint:
             self._log("=" * 60 + "\n", f"{'='*60}{Style.RESET_ALL}\n")
 
     def agent(self, action):
+        self.step_count += 1
+
+        # Always print step progress to terminal
+        print(f"{Fore.CYAN}[Step {self.step_count}]{Style.RESET_ALL}", end=" ", flush=True)
+
         if self.enable_terminal or self.enable_file:
-            self.step_count += 1
             self._log("\n" + "=" * 60, f"\n{Fore.CYAN}{'='*60}")
             self._log(f"Step {self.step_count}", f"Step {self.step_count}")
             self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
@@ -113,6 +125,9 @@ class SessionPrint:
                 self._log(f"   {action_text}")
 
     def service(self, response):
+        # Always print step completion to terminal
+        print(f"{Fore.GREEN}✓{Style.RESET_ALL}")
+
         if self.enable_terminal or self.enable_file:
             self._log("\n📋 Observation:", f"\n{Fore.BLUE}📋 Observation:{Style.RESET_ALL}")
             # Convert to string if it's not already
@@ -127,10 +142,21 @@ class SessionPrint:
             self._log("-" * 60 + "\n", f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}\n")
 
     def result(self, results):
-        self._log("\n" + "=" * 60, f"\n{Fore.MAGENTA}{'='*60}")
-        self._log("📊 Results:", f"📊 Results:")
-        self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
-        self._log(f"{results}")
+        # Always print final result to terminal
+        success = results.get('success', False)
+        score = results.get('score', 'N/A')
+
+        if success:
+            print(f"\n{Fore.GREEN}✅ SUCCESS{Style.RESET_ALL} - Score: {score}")
+        else:
+            print(f"\n{Fore.RED}❌ FAILED{Style.RESET_ALL} - Score: {score}")
+
+        # Detailed results to log file or terminal if enabled
+        if self.enable_terminal or self.enable_file:
+            self._log("\n" + "=" * 60, f"\n{Fore.MAGENTA}{'='*60}")
+            self._log("📊 Results:", f"📊 Results:")
+            self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
+            self._log(f"{results}")
 
     def registry_info(self, registry):
         """Print static problem registry information."""
