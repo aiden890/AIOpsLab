@@ -183,8 +183,8 @@ class StaticTaskActions:
     @action
     def exec_shell(self, command: str, timeout: int = 30) -> str:
         """
-        Execute a shell command on the host machine.
-        Use this to process files saved by get_logs/get_metrics/get_traces.
+        Execute a shell command with restricted access to telemetry directories only.
+        Agent can only access: static_logs_output, static_metrics_output, static_traces_output
 
         Args:
             command (str): The command to execute.
@@ -202,6 +202,87 @@ class StaticTaskActions:
             if pattern in command:
                 return error
 
+        # Validate path access - only allow telemetry output directories
+        validation_error = self._validate_path_access(command)
+        if validation_error:
+            return validation_error
+
         result = Shell.local_exec(command, timeout=timeout)
 
         return result
+
+    def _validate_path_access(self, command: str) -> str | None:
+        """
+        Validate that command only accesses allowed telemetry directories.
+
+        Allowed directories:
+        - static_logs_output
+        - static_metrics_output
+        - static_traces_output
+
+        Args:
+            command: The shell command to validate
+
+        Returns:
+            Error message if validation fails, None if valid
+        """
+        ALLOWED_DIRS = [
+            "static_logs_output",
+            "static_metrics_output",
+            "static_traces_output"
+        ]
+
+        # Block dangerous patterns
+        DANGEROUS_PATTERNS = [
+            (r'\.\./|/\.\./', "Parent directory traversal (..) is not allowed"),
+            (r'~|/Users/|/home/|/root/', "Home directory access is not allowed"),
+            (r'/etc/|/var/|/sys/|/proc/', "System directory access is not allowed"),
+            (r'\$HOME|\$USER', "Environment variable expansion is not allowed"),
+        ]
+
+        for pattern, error_msg in DANGEROUS_PATTERNS:
+            if re.search(pattern, command):
+                return f"Error: {error_msg}"
+
+        # Extract potential file paths from command
+        # Look for absolute paths
+        absolute_paths = re.findall(r'/[a-zA-Z0-9_\-/.]+', command)
+        if absolute_paths:
+            return (
+                f"Error: Absolute paths are not allowed.\n"
+                f"Only relative paths within these directories are permitted:\n"
+                f"  - {', '.join(ALLOWED_DIRS)}\n"
+                f"Blocked: {', '.join(absolute_paths)}"
+            )
+
+        # Extract words that might be paths
+        words = command.split()
+        for word in words:
+            # Skip flags, commands, and empty strings
+            if not word or word.startswith('-'):
+                continue
+
+            # Skip common shell commands
+            if word in ['ls', 'cat', 'grep', 'head', 'tail', 'wc', 'find', 'awk', 'sed', 'cut', 'sort', 'uniq', 'less', 'more', 'echo', 'pwd']:
+                continue
+
+            # Skip quoted strings (likely search patterns or arguments)
+            if word.startswith('"') or word.startswith("'") or word.startswith('|') or word.startswith('>'):
+                continue
+
+            # If word looks like a path (contains / or matches directory names)
+            if '/' in word or any(word.startswith(d) for d in ALLOWED_DIRS):
+                # Check if it's in an allowed directory
+                is_allowed = any(
+                    word == allowed_dir or word.startswith(f"{allowed_dir}/")
+                    for allowed_dir in ALLOWED_DIRS
+                )
+
+                if not is_allowed:
+                    return (
+                        f"Error: Access denied to '{word}'.\n"
+                        f"Commands can only access these directories:\n"
+                        f"  - {', '.join(ALLOWED_DIRS)}"
+                    )
+
+        return None
