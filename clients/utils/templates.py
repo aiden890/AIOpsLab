@@ -29,6 +29,29 @@ Action: <your next step>
 
 ### custom templates
 
+DOCS_WITH_POSSIBLE_ROOT_CAUSES = """SERVICE MONITORING TASK
+
+{prob_desc}
+
+Available monitoring APIs:
+
+{telemetry_apis}
+
+Diagnostic interface:
+
+{shell_api}
+
+Submission API:
+
+{submit_api}
+
+{possible_root_causes}
+
+At each turn, you should respond with:
+Thought: <your analysis>
+Action: <your next step>
+"""
+
 DOCS_SHELL_ONLY = """{prob_desc}
 You are provided with a diagnostic interface for the service:
 
