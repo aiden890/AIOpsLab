@@ -17,22 +17,6 @@ from aiopslab.orchestrator.evaluators.openrca_eval import (
 )
 
 
-DEFAULT_TELEMETRY_GUIDE = """\
-How to access telemetry data:
-Step 1 - Fetch: Use get_logs/get_metrics/get_traces to save data locally.
-  e.g., get_logs("{namespace}") or get_logs("{namespace}", "<service>")
-Step 2 - Read or Filter:
-  - read_logs/read_metrics/read_traces("<path>/file.csv") → returns full file contents
-  - exec_shell("grep <pattern> <path>/file.csv") → filtered results only
-
-Submit your root cause analysis as a JSON dict. Each root cause should be
-a numbered key ("1", "2", ...) with the relevant fields:
-- "root cause occurrence datetime": "YYYY-MM-DD HH:MM:SS"
-- "root cause component": "component_name"
-- "root cause reason": "fault_reason"
-Include only the fields requested in the task above."""
-
-
 class OpenRCATask(Task):
     """Unified task for all OpenRCA task types (task_1~task_7)."""
 
@@ -56,11 +40,6 @@ class OpenRCATask(Task):
         # Actions are set by the problem class that inherits this
         self.actions = None
 
-        # Agent-specific telemetry guide (default: ReAct style)
-        self.telemetry_guide = DEFAULT_TELEMETRY_GUIDE.format(
-            namespace=app.namespace
-        )
-
         services_str = ", ".join(self.services) if self.services else "unknown"
 
         self.task_desc = """\
@@ -74,7 +53,19 @@ class OpenRCATask(Task):
 
             {instruction}
 
-            {telemetry_guide}
+            How to access telemetry data:
+            Step 1 - Fetch: Use get_logs/get_metrics/get_traces to save data locally.
+              e.g., get_logs("{namespace}") or get_logs("{namespace}", "<service>")
+            Step 2 - Read or Filter:
+              - read_logs/read_metrics/read_traces("<path>/file.csv") → returns full file contents
+              - exec_shell("grep <pattern> <path>/file.csv") → filtered results only
+
+            Submit your root cause analysis as a JSON dict. Each root cause should be
+            a numbered key ("1", "2", ...) with the relevant fields:
+            - "root cause occurrence datetime": "YYYY-MM-DD HH:MM:SS"
+            - "root cause component": "component_name"
+            - "root cause reason": "fault_reason"
+            Include only the fields requested in the task above.
             """
 
         self._services_str = services_str
@@ -95,7 +86,6 @@ class OpenRCATask(Task):
             services=self._services_str,
             instruction=self.instruction,
             namespace=self.app.namespace,
-            telemetry_guide=self.telemetry_guide,
         )
 
     def get_instructions(self):

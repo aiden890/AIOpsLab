@@ -1,9 +1,0 @@
-# LLM configuration for OpenRCA RCA Agent
-# Supported SOURCE values: OpenAI, Google, Anthropic, AI (OpenAI-compatible)
-#
-# For Azure OpenAI: use SOURCE: "AI", leave API_KEY/API_BASE empty
-# to auto-detect from .env (AZURE_OPENAI_API_KEY, AZURE_OPENAI_BASE_URL)
-
-SOURCE:   "AI"
-MODEL:    "gpt-4.1-mini"
-# API_KEY and API_BASE are loaded from .env (AZURE_OPENAI_API_KEY, AZURE_OPENAI_BASE_URL)
