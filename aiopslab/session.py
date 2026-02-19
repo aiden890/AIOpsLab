@@ -32,6 +32,7 @@ class Session:
         self.end_time = None
         self.agent_name = None
         self.extra = {}
+        self.model_name = None
         self.results_dir = Path(results_dir) if isinstance(results_dir, str) else results_dir
 
     def set_problem(self, problem, pid=None):
@@ -67,6 +68,14 @@ class Session:
             agent_name (str): The name of the agent.
         """
         self.agent_name = agent_name
+
+    def set_model(self, model_name):
+        """Set the model name for the session.
+
+        Args:
+            model_name (str): The name of the LLM model.
+        """
+        self.model_name = model_name
 
     def add(self, item):
         """Add an item into the session history.
@@ -119,32 +128,34 @@ class Session:
 
         return summary
 
-    def to_json(self):
-        """Save the session to a JSON file."""
-
-
+    def get_filepath(self, file_type: str = "log"):
+        """Get the file path to save the session data."""
         results_dir = self.results_dir if self.results_dir else RESULTS_DIR
 
         # Parse problem ID to extract dataset and task info
-        # Example pid: "openrca_bank-task_1-0" -> dataset: "openrca_bank"
         agent = self.agent_name or "agent"
         pid = self.pid or "unknown"
 
-        # Extract dataset from pid (first part before first hyphen)
+        # Extract dataset from pid
         if '-' in pid:
-            dataset,task = pid.split('-', maxsplit=1)  # e.g., "openrca_bank", "task_1"
+            dataset, task = pid.split('-', maxsplit=1)
         else:
-            dataset,task = "unknown", "unknown"
+            dataset, task = "unknown", "unknown"
 
         # Create directory structure: dataset/agent/
         save_dir = results_dir / dataset / agent
-        save_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create filename: {task&index}_{timestamp}.json
+        # Create filename: {model}_{task}_{timestamp}.log
         timestamp = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M")
-        filename = f"{task}_{timestamp}.json"
+        model = self.model_name.replace("/", "-") if self.model_name else "unknown"
+        filename = f"{model}_{task}_{timestamp}.{file_type}"
 
-        filepath = save_dir / filename
+        return save_dir / filename
+
+    def to_json(self):
+        """Save the session to a JSON file."""
+
+        filepath = self.get_filepath(file_type="json")
 
         with open(filepath, "w") as f:
             json.dump(self.to_dict(), f, indent=4)

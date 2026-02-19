@@ -33,6 +33,11 @@ class BaseOrchestrator:
         """Register the agent for the current session."""
         self.agent = agent
         self.agent_name = name
+        # Get model name from agent if available
+        if hasattr(agent, 'get_model_name'):
+            self.model_name = agent.get_model_name()
+        else:
+            self.model_name = "model"
 
     async def ask_agent(self, input):
         """Ask the agent for the next action given the current context."""
@@ -91,6 +96,7 @@ class BaseOrchestrator:
         deployment = self.probs.get_problem_deployment(problem_id)
         self.session.set_problem(prob, pid=problem_id)
         self.session.set_agent(self.agent_name)
+        self.session.set_model(self.model_name)
 
         # Subclass-specific environment setup
         self._setup_environment(prob, deployment)
@@ -122,6 +128,10 @@ class BaseOrchestrator:
         action_instr = "Please take the next action"
         action, env_response, results = "", "", {}
         self.session.start()
+
+        # Initialize log file for session
+        log_filepath = self.session.get_filepath(file_type="log")
+        self.sprint.init_log_file(str(log_filepath))
 
         try:
             for step in range(max_steps):
@@ -162,6 +172,9 @@ class BaseOrchestrator:
             atexit.unregister(exit_cleanup_fault)
 
         self.session.problem.app.cleanup()
+
+        # Close log file
+        self.sprint.close_log_file()
 
         # Subclass-specific teardown
         self._teardown_environment(self.session.problem)

@@ -72,6 +72,11 @@ class GPTClient:
     def __init__(self, auth_type: str = "key", api_key: Optional[str] = None, azure_config_file: Optional[str] = None, use_cache: bool = True):
         self.cache = Cache()
         self.client = self._setup_client(auth_type, api_key, azure_config_file)
+        self.model_name = GPT_MODEL
+
+    def get_model_name(self):
+        """Return the model name used by this client."""
+        return self.model_name or "unknown"
 
     def _load_azure_config(self, yaml_file_path: str) -> AzureConfig:
         with open(yaml_file_path, "r") as file:
@@ -164,6 +169,11 @@ class DeepSeekClient:
 
     def __init__(self):
         self.cache = Cache()
+        self.model_name = "deepseek-reasoner"
+
+    def get_model_name(self):
+        """Return the model name used by this client."""
+        return self.model_name
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
         if self.cache is not None:
@@ -200,6 +210,11 @@ class QwenClient:
 
     def __init__(self):
         self.cache = Cache()
+        self.model_name = "qwq-32b"
+
+    def get_model_name(self):
+        """Return the model name used by this client."""
+        return self.model_name
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
         if self.cache is not None:
@@ -262,10 +277,15 @@ class vLLMClient:
                  max_tokens=1024):
         self.cache = Cache()
         self.model = model
+        self.model_name = model
         self.repetition_penalty = repetition_penalty
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
+
+    def get_model_name(self):
+        """Return the model name used by this client."""
+        return self.model_name
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
         if self.cache is not None:
@@ -307,6 +327,11 @@ class OpenRouterClient:
     def __init__(self, model="anthropic/claude-3.5-sonnet"):
         self.cache = Cache()
         self.model = model
+        self.model_name = model
+
+    def get_model_name(self):
+        """Return the model name used by this client."""
+        return self.model_name
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
         if self.cache is not None:
@@ -350,6 +375,11 @@ class LLaMAClient:
 
     def __init__(self):
         self.cache = Cache()
+        self.model_name = "llama-3.1-8b-instant"
+
+    def get_model_name(self):
+        """Return the model name used by this client."""
+        return self.model_name
 
     def inference(self, payload: list[dict[str, str]]) -> list[str]:
         if self.cache is not None:
