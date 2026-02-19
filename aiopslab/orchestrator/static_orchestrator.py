@@ -19,8 +19,8 @@ STATIC_OUTPUT_DIRS = [
 class StaticOrchestrator(BaseOrchestrator):
     """Orchestrator for static dataset problems (Docker-based)."""
 
-    def __init__(self, results_dir=None):
-        super().__init__(results_dir=results_dir)
+    def __init__(self, results_dir=None, eval_id=None):
+        super().__init__(results_dir=results_dir, eval_id=eval_id)
         self.probs = StaticProblemRegistry()
 
     def _setup_environment(self, prob, deployment):
