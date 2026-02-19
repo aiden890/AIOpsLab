@@ -21,7 +21,7 @@ class SessionItem(BaseModel):
 
 
 class Session:
-    def __init__(self, results_dir=None) -> None:
+    def __init__(self, results_dir=None, eval_id=None) -> None:
         self.session_id = uuid.uuid4()
         self.pid = None
         self.problem = None
@@ -33,6 +33,7 @@ class Session:
         self.agent_name = None
         self.extra = {}
         self.model_name = None
+        self.eval_id = eval_id
         self.results_dir = Path(results_dir) if isinstance(results_dir, str) else results_dir
 
     def set_problem(self, problem, pid=None):
@@ -142,13 +143,14 @@ class Session:
         else:
             dataset, task = "unknown", "unknown"
 
-        # Create directory structure: dataset/agent/
-        save_dir = results_dir / dataset / agent
-
-        # Create filename: {model}_{task}_{timestamp}.log
-        timestamp = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M")
+        # Create directory structure: dataset/agent/model/eval_id/
         model = self.model_name.replace("/", "-") if self.model_name else "unknown"
-        filename = f"{model}_{task}_{timestamp}.{file_type}"
+        eval_id = self.eval_id or "default"
+        save_dir = results_dir / dataset / agent / model / eval_id
+
+        # Create filename: {timestamp}_{task}.log
+        timestamp = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M")
+        filename = f"{timestamp}_{task}.{file_type}"
 
         return save_dir / filename
 

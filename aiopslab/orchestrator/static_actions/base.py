@@ -4,13 +4,15 @@ Follows the same get/read pattern as the existing TaskActions:
   - get_*  : fetch from Docker container → save to local CSV → return path
   - read_* : read a local CSV file → return data as string
 
+New analytical actions return formatted summaries inline (no file save needed).
+
 Uses DockerStaticApp (production) or StaticApp (tests) as the service client.
 """
 
 import os
 import pandas as pd
 
-from aiopslab.utils.actions import action, read, write
+from aiopslab.utils.actions import action, read
 from aiopslab.service.static_app import StaticApp, DockerStaticApp
 from aiopslab.service.shell import Shell
 
@@ -29,6 +31,8 @@ class StaticTaskActions:
 
     get_* fetches telemetry from Docker container, saves locally, returns path.
     read_* reads a saved local CSV file and returns its contents.
+    Analytical actions (get_log_overview, get_anomaly_metrics, etc.) return
+    inline formatted text — no file write needed.
     """
 
     def __init__(self, container_name: str = None, base_path: str = None):
@@ -42,21 +46,111 @@ class StaticTaskActions:
         else:
             self.static_app = StaticApp(base_path or "/agent/telemetry")
 
-    # ----- get_* : fetch from source → save to local → return path -----
+    # -------------------------------------------------------------------------
+    # Discovery / overview actions (no file save — return inline text)
+    # -------------------------------------------------------------------------
 
     @read
-    def get_logs(self, namespace: str, service: str = None) -> str:
-        """
-        Collects log data from a static dataset and saves to local CSV files.
+    def get_log_overview(self, namespace: str) -> str:
+        """Compact summary of log data: time range, row counts per service and log type."""
+        overview = self.static_app.fetch_log_overview(namespace)
+        if not overview:
+            return f"No log data found for namespace '{namespace}'"
 
-        Args:
-            namespace (str): The namespace (e.g., "static-bank").
-            service (str, optional): The service name to filter by. If omitted, returns all logs.
+        lines = [f"Log overview for namespace '{namespace}':"]
+        lines.append(f"  Total rows: {overview.get('total_rows', 'N/A'):,}")
 
-        Returns:
-            str: Path to the saved log file (CSV format).
-        """
-        df = self.static_app.fetch_logs_df(namespace, service)
+        tr = overview.get("time_range", {})
+        if tr:
+            lines.append(f"  Time range: {tr['start']} → {tr['end']} (UTC)")
+
+        svc = overview.get("rows_per_service", {})
+        if svc:
+            lines.append("  Rows per service (cmdb_id):")
+            for name, cnt in sorted(svc.items(), key=lambda x: -x[1]):
+                lines.append(f"    {name}: {cnt:,}")
+
+        lt = overview.get("rows_per_log_type", {})
+        if lt:
+            lines.append("  Rows per log type:")
+            for name, cnt in sorted(lt.items(), key=lambda x: -x[1]):
+                lines.append(f"    {name}: {cnt:,}")
+
+        return "\n".join(lines)
+
+    @read
+    def get_anomaly_metrics(self, namespace: str, duration: int = None) -> str:
+        """Anomaly report per service: flags low success rate (<95%) or high response time (>500ms)."""
+        df = self.static_app.fetch_anomaly_metrics(namespace, duration)
+        if df.empty:
+            msg = f"No metric data found for namespace '{namespace}'"
+            if duration:
+                msg += f" in the last {duration} minutes"
+            return msg
+
+        lines = [f"Metric anomaly report for namespace '{namespace}'"]
+        if duration:
+            lines[0] += f" (last {duration} min)"
+        lines.append("")
+
+        for _, row in df.iterrows():
+            flags = []
+            if row.get("sr_anomaly"):
+                flags.append(f"LOW SUCCESS RATE ({row.get('min_success_rate')}%)")
+            if row.get("mrt_anomaly"):
+                flags.append(f"HIGH RESPONSE TIME ({row.get('max_response_time_ms')}ms)")
+            status = " *** " + ", ".join(flags) if flags else " (normal)"
+            lines.append(f"  {row['service']}{status}")
+            if "avg_success_rate" in row:
+                lines.append(f"    success_rate: min={row.get('min_success_rate')}% avg={row.get('avg_success_rate')}%")
+            if "avg_response_time_ms" in row:
+                lines.append(f"    response_time: avg={row.get('avg_response_time_ms')}ms max={row.get('max_response_time_ms')}ms")
+            if "avg_request_rate" in row:
+                lines.append(f"    request_rate: avg={row.get('avg_request_rate')}")
+
+        return "\n".join(lines)
+
+    @read
+    def get_metric_summary(self, namespace: str, duration: int = None) -> str:
+        """Aggregated metric stats per service (mean/min/max). More compact than raw rows."""
+        df = self.static_app.fetch_metric_summary(namespace, duration)
+        if df.empty:
+            return f"No metric data found for namespace '{namespace}'"
+        return df.to_string(index=False)
+
+    @read
+    def get_trace_summary(self, namespace: str, duration: int = None) -> str:
+        """Aggregated trace stats per service: span count, avg/max/p95 duration."""
+        df = self.static_app.fetch_trace_summary(namespace, duration)
+        if df.empty:
+            return f"No trace data found for namespace '{namespace}'"
+        return df.to_string(index=False)
+
+    @read
+    def search_logs(self, namespace: str, keyword: str,
+                    duration: int = None, limit: int = 100) -> str:
+        """Case-insensitive keyword search over logs. Returns matching rows."""
+        df = self.static_app.search_logs_df(namespace, keyword, duration, limit)
+        if df.empty:
+            msg = f"No log entries matching '{keyword}' found in namespace '{namespace}'"
+            if duration:
+                msg += f" (last {duration} min)"
+            return msg
+        header = f"Log search results for '{keyword}' in '{namespace}'"
+        if duration:
+            header += f" (last {duration} min)"
+        header += f" — {len(df)} rows (limit={limit}):"
+        return header + "\n" + df.to_string(index=False)
+
+    # -------------------------------------------------------------------------
+    # get_* : fetch from source → save to local CSV → return path
+    # -------------------------------------------------------------------------
+
+    @read
+    def get_logs(self, namespace: str, service: str = None,
+                 limit: int = 500) -> str:
+        """Fetches log data, saves to CSV, returns file path. Use read_logs() or exec_shell() to inspect."""
+        df = self.static_app.fetch_logs_df(namespace, service, limit=limit)
         if df.empty:
             filter_msg = f" for service '{service}'" if service else ""
             return f"No logs found{filter_msg} in namespace '{namespace}'"
@@ -70,16 +164,7 @@ class StaticTaskActions:
 
     @read
     def get_metrics(self, namespace: str, duration: int = 5) -> str:
-        """
-        Collects metrics data from a static dataset and saves to local CSV files.
-
-        Args:
-            namespace (str): The namespace (e.g., "static-bank").
-            duration (int): Minutes of data to retrieve.
-
-        Returns:
-            str: Path to the saved metrics file (CSV format).
-        """
+        """Fetches metrics data, saves to CSV, returns file path. Use read_metrics() to inspect."""
         df = self.static_app.fetch_metrics_df(namespace, duration)
         if df.empty:
             return f"No metrics found for namespace '{namespace}'"
@@ -94,16 +179,7 @@ class StaticTaskActions:
 
     @read
     def get_traces(self, namespace: str, duration: int = 5) -> str:
-        """
-        Collects trace data from a static dataset and saves to local CSV files.
-
-        Args:
-            namespace (str): The namespace (e.g., "static-bank").
-            duration (int): Minutes of data to retrieve.
-
-        Returns:
-            str: Path to the saved traces file (CSV format).
-        """
+        """Fetches trace data, saves to CSV, returns file path. Use read_traces() to inspect."""
         df = self.static_app.fetch_traces_df(namespace, duration)
         if df.empty:
             return f"No traces found for namespace '{namespace}'"
@@ -116,83 +192,68 @@ class StaticTaskActions:
         print(f"Trace data saved to: {file_path}")
         return file_path
 
-    # ----- read_* : read a saved local CSV file → return data -----
+    # -------------------------------------------------------------------------
+    # read_* : read a saved local CSV file → return data
+    # -------------------------------------------------------------------------
 
     @staticmethod
     @read
-    def read_logs(file_path: str) -> str:
-        """
-        Reads and returns log data from a specified CSV file.
-
-        Args:
-            file_path (str): Path to the log file (CSV format).
-
-        Returns:
-            str: The log data or an error message.
-        """
+    def read_logs(file_path: str, limit: int = 200, offset: int = 0) -> str:
+        """Reads log CSV saved by get_logs(). Supports pagination via offset/limit."""
         if not os.path.exists(file_path):
             return f"error: Log file '{file_path}' not found."
         try:
             df = pd.read_csv(file_path)
-            return df.to_string(index=False)
+            total = len(df)
+            page = df.iloc[offset: offset + limit]
+            header = f"Showing rows {offset}–{offset + len(page) - 1} of {total} total"
+            if offset + limit < total:
+                header += f" (use offset={offset + limit} for next page)"
+            return header + "\n" + page.to_string(index=False)
         except Exception as e:
             return f"Failed to read logs: {str(e)}"
 
     @staticmethod
     @read
-    def read_metrics(file_path: str) -> str:
-        """
-        Reads and returns metrics from a specified CSV file.
-
-        Args:
-            file_path (str): Path to the metrics file (CSV format).
-
-        Returns:
-            str: The requested metrics or an error message.
-        """
+    def read_metrics(file_path: str, limit: int = 200, offset: int = 0) -> str:
+        """Reads metrics CSV saved by get_metrics(). Supports pagination via offset/limit."""
         if not os.path.exists(file_path):
             return f"error: Metrics file '{file_path}' not found."
         try:
             df = pd.read_csv(file_path)
-            return df.to_string(index=False)
+            total = len(df)
+            page = df.iloc[offset: offset + limit]
+            header = f"Showing rows {offset}–{offset + len(page) - 1} of {total} total"
+            if offset + limit < total:
+                header += f" (use offset={offset + limit} for next page)"
+            return header + "\n" + page.to_string(index=False)
         except Exception as e:
             return f"Failed to read metrics: {str(e)}"
 
     @staticmethod
     @read
-    def read_traces(file_path: str) -> str:
-        """
-        Reads and returns traces from a specified CSV file.
-
-        Args:
-            file_path (str): Path to the traces file (CSV format).
-
-        Returns:
-            str: The requested traces or an error message.
-        """
+    def read_traces(file_path: str, limit: int = 200, offset: int = 0) -> str:
+        """Reads traces CSV saved by get_traces(). Supports pagination via offset/limit."""
         if not os.path.exists(file_path):
             return f"error: Traces file '{file_path}' not found."
         try:
             df = pd.read_csv(file_path)
-            return df.to_string(index=False)
+            total = len(df)
+            page = df.iloc[offset: offset + limit]
+            header = f"Showing rows {offset}–{offset + len(page) - 1} of {total} total"
+            if offset + limit < total:
+                header += f" (use offset={offset + limit} for next page)"
+            return header + "\n" + page.to_string(index=False)
         except Exception as e:
             return f"Failed to read traces: {str(e)}"
 
-    # ----- other actions -----
+    # -------------------------------------------------------------------------
+    # Shell access (restricted)
+    # -------------------------------------------------------------------------
 
     @action
     def exec_shell(self, command: str, timeout: int = 30) -> str:
-        """
-        Execute a shell command with restricted access to telemetry directories only.
-        Agent can only access: static_logs_output, static_metrics_output, static_traces_output
-
-        Args:
-            command (str): The command to execute.
-            timeout (int): Timeout in seconds. Default is 30.
-
-        Returns:
-            str: The output of the command.
-        """
+        """Runs a shell command. Restricted to: static_logs_output, static_metrics_output, static_traces_output."""
         BLOCK_LIST = {
             "kubectl edit": "Error: Cannot use `kubectl edit`. Use `kubectl patch` instead.",
             "kubectl port-forward": "Error: Cannot use `kubectl port-forward`.",
@@ -244,9 +305,11 @@ class StaticTaskActions:
             if re.search(pattern, command):
                 return f"Error: {error_msg}"
 
-        # Extract potential file paths from command
-        # Look for absolute paths
-        absolute_paths = re.findall(r'/[a-zA-Z0-9_\-/.]+', command)
+        # Extract potential file paths from command.
+        # Only flag /path that starts at a word boundary (genuine absolute paths),
+        # not slashes inside relative paths like static_traces_output/traces.csv
+        # or awk expressions like sum/NR.
+        absolute_paths = re.findall(r'(?<!\w)/[a-zA-Z0-9_\-/.]+', command)
         if absolute_paths:
             return (
                 f"Error: Absolute paths are not allowed.\n"

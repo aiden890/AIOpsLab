@@ -41,23 +41,32 @@ class Docker:
         return self.exec_command(command)
 
     def exec_in_container(self, container_name: str, command: str,
-                          detach: bool = False) -> str:
+                          detach: bool = False, timeout: int = None) -> str:
         """Execute a command inside a running Docker container.
 
         Args:
             container_name: Name of the container.
             command: Shell command to run inside the container.
             detach: If True, run in detached mode (docker exec -d).
+            timeout: Maximum time in seconds to wait (None = no timeout).
 
         Returns:
             stdout from the command (empty string if detached).
         """
         flag = " -d" if detach else ""
         full = f"docker exec{flag} {container_name} bash -c {repr(command)}"
-        return self.exec_command(full)
+        return self.exec_command(full, timeout=timeout)
 
-    def exec_command(self, command: str, input_data=None, cwd=None, env=None):
-        """Execute an arbitrary command."""
+    def exec_command(self, command: str, input_data=None, cwd=None, env=None, timeout=None):
+        """Execute an arbitrary command.
+
+        Args:
+            command: Command to execute
+            input_data: Optional input data to pass to the command
+            cwd: Optional working directory
+            env: Optional environment variables
+            timeout: Optional timeout in seconds
+        """
         if input_data is not None:
             input_data = input_data.encode("utf-8")
         try:
@@ -69,8 +78,11 @@ class Docker:
                 shell=True,
                 cwd=cwd,
                 env=env,
+                timeout=timeout,
             )
             if out is not None:
                 return out.stdout.decode("utf-8")
+        except subprocess.TimeoutExpired:
+            return f"Error: Command timed out after {timeout} seconds"
         except subprocess.CalledProcessError as e:
             return e.stderr.decode("utf-8")

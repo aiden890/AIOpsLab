@@ -31,6 +31,22 @@ exec_shell("kubectl get services --all-namespaces")
 ```
             """)
 
+    def _preprocess_react_format(self, response: str) -> str:
+        """If the response uses 'Action: api_call()' without a code block, wrap it."""
+        # Already has backtick code block — nothing to do
+        if re.search(r"```", response):
+            return response
+        # Capture everything after "Action:" until the next section or end of string.
+        # re.DOTALL lets "." match newlines so multi-line actions are captured whole.
+        action_match = re.search(
+            r"(?:^|\n)Action:\s*(.*?)(?=\n(?:Thought|Observation|Action):|$)",
+            response, re.IGNORECASE | re.DOTALL
+        )
+        if action_match:
+            action_content = action_match.group(1).strip()
+            return response + f"\n```\n{action_content}\n```"
+        return response
+
     def parse(self, response: str) -> dict:
         """Parses the response string to extract the API name and arguments.
 
@@ -40,6 +56,7 @@ exec_shell("kubectl get services --all-namespaces")
         Returns:
             dict: The parsed API name and arguments.
         """
+        response = self._preprocess_react_format(response)
         self.validate(response)
         code_block = self.extract_codeblock(response)
         context = self.extract_context(response)

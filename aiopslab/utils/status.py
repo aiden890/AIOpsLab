@@ -78,6 +78,15 @@ class SessionPrint:
             self.log_file.write(clean_text + '\n')
             self.log_file.flush()
 
+    def system_prompt(self, text):
+        """Print the full system prompt sent to the agent."""
+        if self.enable_terminal or self.enable_file:
+            self._log("=" * 60, f"\n{Fore.MAGENTA}{'='*60}")
+            self._log("📨 System Prompt (First Prompt)", "📨 System Prompt (First Prompt)")
+            self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}\n")
+            self._log(text)
+            self._log("=" * 60 + "\n", f"\n{Fore.MAGENTA}{'='*60}{Style.RESET_ALL}\n")
+
     def problem_init(self, problem_desc, instructions, apis=None):
         """Print initial problem setup."""
         if self.enable_terminal or self.enable_file:
@@ -162,7 +171,33 @@ class SessionPrint:
             self._log("\n" + "=" * 60, f"\n{Fore.MAGENTA}{'='*60}")
             self._log("📊 Results:", f"📊 Results:")
             self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
-            self._log(f"{results}")
+
+            # Print full record (faults from record.csv)
+            record = results.get("record")
+            if record:
+                self._log("📋 Record (ground truth faults):", f"{Fore.YELLOW}📋 Record (ground truth faults):{Style.RESET_ALL}")
+                header = f"   {'datetime':<22} {'level':<10} {'component':<15} {'reason'}"
+                self._log(header)
+                self._log("   " + "-" * 65)
+                for fault in record:
+                    row = (
+                        f"   {fault.get('datetime', ''):<22}"
+                        f" {fault.get('level', ''):<10}"
+                        f" {fault.get('component', ''):<15}"
+                        f" {fault.get('reason', '')}"
+                    )
+                    self._log(row)
+                self._log("")
+
+            # Print scoring criteria
+            ground_truth = results.get("ground_truth")
+            if ground_truth:
+                self._log("📌 Scoring Criteria:", f"{Fore.YELLOW}📌 Scoring Criteria:{Style.RESET_ALL}")
+                self._log(f"   {ground_truth}\n")
+
+            # Print remaining metrics (exclude record/ground_truth from the dict dump)
+            metrics = {k: v for k, v in results.items() if k not in ("ground_truth", "record")}
+            self._log(f"{metrics}")
 
     def registry_info(self, registry):
         """Print static problem registry information."""

@@ -17,6 +17,18 @@ from pathlib import Path
 
 # OpenRCA dataset timestamps are in UTC+8 (Asia/Shanghai)
 _UTC_PLUS_8 = timezone(timedelta(hours=8))
+_UTC = timezone.utc
+
+
+def convert_scoring_points_to_utc(scoring_points: str) -> str:
+    """Convert all UTC+8 datetime strings (YYYY-MM-DD HH:MM:SS) in scoring_points to UTC."""
+    def _to_utc(m):
+        try:
+            dt = datetime.strptime(m.group(0), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_UTC_PLUS_8)
+            return dt.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return m.group(0)
+    return re.sub(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', _to_utc, scoring_points)
 
 
 class OpenRCAQueryParser(BaseQueryParser):
@@ -170,9 +182,11 @@ class OpenRCAQueryParser(BaseQueryParser):
             return {
                 'start': int(start_dt.timestamp()),
                 'end': int(end_dt.timestamp()),
-                'start_str': start_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                'end_str': end_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                'duration': int((end_dt - start_dt).total_seconds())
+                'start_str': start_dt.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                'end_str': end_dt.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                'duration': int((end_dt - start_dt).total_seconds()),
+                '_start_dt': start_dt,
+                '_end_dt': end_dt,
             }
 
         except Exception as e:
@@ -198,13 +212,59 @@ class OpenRCAQueryParser(BaseQueryParser):
         min_ts -= 1800  # 30 minutes before
         max_ts += 1800  # 30 minutes after
 
+        start_dt = datetime.fromtimestamp(min_ts, tz=_UTC_PLUS_8)
+        end_dt = datetime.fromtimestamp(max_ts, tz=_UTC_PLUS_8)
         return {
             'start': int(min_ts),
             'end': int(max_ts),
-            'start_str': datetime.fromtimestamp(min_ts, tz=_UTC_PLUS_8).strftime("%Y-%m-%d %H:%M:%S"),
-            'end_str': datetime.fromtimestamp(max_ts, tz=_UTC_PLUS_8).strftime("%Y-%m-%d %H:%M:%S"),
-            'duration': int(max_ts - min_ts)
+            'start_str': start_dt.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            'end_str': end_dt.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S"),
+            'duration': int(max_ts - min_ts),
+            '_start_dt': start_dt,
+            '_end_dt': end_dt,
         }
+
+    def _rewrite_instruction_to_utc(self, instruction: str, start_dt: datetime, end_dt: datetime) -> str:
+        """Replace UTC+8 time mentions in instruction with UTC equivalents."""
+        start_utc = start_dt.astimezone(_UTC)
+        end_utc = end_dt.astimezone(_UTC)
+        result = instruction
+
+        # Replace HH:MM time strings
+        result = result.replace(start_dt.strftime("%H:%M"), start_utc.strftime("%H:%M"))
+        result = result.replace(end_dt.strftime("%H:%M"), end_utc.strftime("%H:%M"))
+
+        # Replace HH:MM:SS if present
+        result = result.replace(start_dt.strftime("%H:%M:%S"), start_utc.strftime("%H:%M:%S"))
+        result = result.replace(end_dt.strftime("%H:%M:%S"), end_utc.strftime("%H:%M:%S"))
+
+        # Replace date strings if UTC date differs from UTC+8 date
+        if start_dt.date() != start_utc.date():
+            orig = f"{start_dt.strftime('%B')} {start_dt.day}, {start_dt.year}"
+            new = f"{start_utc.strftime('%B')} {start_utc.day}, {start_utc.year}"
+            result = result.replace(orig, new)
+            result = result.replace(start_dt.strftime("%Y-%m-%d"), start_utc.strftime("%Y-%m-%d"))
+
+        return result
+
+    def convert_query_row_to_utc(self, query_row: dict) -> dict:
+        """Return a copy of query_row with instruction and scoring_points converted to UTC."""
+        row = dict(query_row)
+        instruction = row.get('instruction', '')
+        scoring_points = row.get('scoring_points', '')
+
+        # Parse time range from instruction to get UTC+8 datetimes for rewriting
+        try:
+            time_range = self._extract_time_range_from_instruction(instruction)
+            start_dt = time_range.get('_start_dt')
+            end_dt = time_range.get('_end_dt')
+            if start_dt and end_dt:
+                row['instruction'] = self._rewrite_instruction_to_utc(instruction, start_dt, end_dt)
+        except Exception as e:
+            print(f"Warning: Could not rewrite instruction to UTC: {e}")
+
+        row['scoring_points'] = convert_scoring_points_to_utc(scoring_points)
+        return row
 
     def _extract_faults(self, time_range: Dict) -> List[Dict]:
         """Extract faults from record.csv within time range"""
@@ -219,9 +279,19 @@ class OpenRCAQueryParser(BaseQueryParser):
 
             # Only include faults within time range
             if time_range['start'] <= ts <= time_range['end']:
+                # Convert datetime string to UTC (record.csv stores UTC+8 strings)
+                raw_dt_str = row.get('datetime', '')
+                if raw_dt_str:
+                    try:
+                        dt_utc8 = datetime.strptime(raw_dt_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=_UTC_PLUS_8)
+                        dt_str = dt_utc8.astimezone(_UTC).strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        dt_str = raw_dt_str
+                else:
+                    dt_str = datetime.fromtimestamp(ts, tz=_UTC).strftime("%Y-%m-%d %H:%M:%S")
                 faults.append({
                     'timestamp': int(ts),
-                    'datetime': row.get('datetime', datetime.fromtimestamp(ts, tz=_UTC_PLUS_8).strftime("%Y-%m-%d %H:%M:%S")),
+                    'datetime': dt_str,
                     'level': row.get('level', 'unknown'),
                     'component': row['component'],
                     'reason': row.get('reason', 'unknown')

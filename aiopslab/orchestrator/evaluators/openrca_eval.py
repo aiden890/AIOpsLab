@@ -24,11 +24,14 @@ def openrca_evaluate(prediction: str, scoring_points: str):
             - score: float 0.0~1.0 (1.0 = perfect)
     """
     # Parse prediction JSON
+    # Accept both double-quoted JSON (json.dumps) and single-quoted Python str(dict)
+    q = r'["\']'
     predict_pattern = (
         r'{\s*'
-        r'(?:"root cause occurrence datetime":\s*"(.*?)")?,?\s*'
-        r'(?:"root cause component":\s*"(.*?)")?,?\s*'
-        r'(?:"root cause reason":\s*"(.*?)")?\s*}'
+        rf'(?:{q}root cause occurrence datetime{q}:\s*{q}(.*?){q})?,?\s*'
+        rf'(?:{q}root cause component{q}:\s*{q}(.*?){q})?,?\s*'
+        rf'(?:{q}root cause reason{q}:\s*{q}(.*?){q})?\s*'
+        r'}'
     )
     predict_matches = re.findall(predict_pattern, prediction)
 

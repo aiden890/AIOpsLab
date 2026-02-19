@@ -97,14 +97,19 @@ class StaticDataset(Application):
             parser = OpenRCAQueryParser(self.dataset_path, query_config)
             time_range = parser._extract_time_range_from_instruction(instruction)
             faults = parser._extract_faults(time_range)
+            # Convert instruction and scoring_points from UTC+8 to UTC
+            utc_row = parser.convert_query_row_to_utc({
+                "instruction": instruction,
+                "scoring_points": row.get("scoring_points", ""),
+            })
             from .time_mapping.base_query_parser import QueryResult
             self.query_info = QueryResult(
                 task_id=row["task_index"],
                 time_range=time_range,
                 faults=faults,
                 metadata={
-                    "instruction": instruction,
-                    "scoring_points": row.get("scoring_points", ""),
+                    "instruction": utc_row["instruction"],
+                    "scoring_points": utc_row["scoring_points"],
                     "query_index": query_index,
                 },
             )
@@ -184,18 +189,23 @@ class StaticDataset(Application):
 
         # Step 1: Initial load (synchronous — blocks until done)
         print(f"  Loading initial telemetry window: {container}")
+        print(f"  (This may take several minutes for large datasets...)")
         result = self.docker.exec_in_container(
-            container, "python /app/process_telemetry.py --mode init"
+            container, "python /app/process_telemetry.py --mode init",
+            timeout=600  # 10 minute timeout for large datasets
         )
         if result:
             print(result)
 
         # Step 2: Start background streaming (detached — returns immediately)
         print(f"  Starting telemetry stream in background")
+        stream_log = "/agent/telemetry/stream.log"
         self.docker.exec_in_container(
-            container, "python /app/process_telemetry.py --mode stream",
+            container,
+            f"python -u /app/process_telemetry.py --mode stream > {stream_log} 2>&1",
             detach=True,
         )
+        print(f"  Stream logs: docker exec {container} tail -f {stream_log}")
 
         if self.time_remapper:
             print(self.time_remapper.get_summary())

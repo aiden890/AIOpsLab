@@ -5,7 +5,9 @@ and evaluation logic. This replaces per-type Detection/Localization/Analysis.
 """
 
 import json
+import re
 import textwrap
+import inspect
 from typing import Any
 
 from aiopslab.orchestrator.tasks.base import Task
@@ -105,12 +107,14 @@ class OpenRCATask(Task):
     def get_available_actions(self):
         if self.actions is None:
             return {}
-        return {
-            method: getattr(self.actions, method).__doc__.strip()
-            for method in dir(self.actions)
-            if callable(getattr(self.actions, method))
-            and getattr(getattr(self.actions, method), "is_action", False)
-        }
+        result = {}
+        for method in dir(self.actions):
+            fn = getattr(self.actions, method)
+            if callable(fn) and getattr(fn, "is_action", False):
+                sig = inspect.signature(fn)
+                doc = (fn.__doc__ or "").strip()
+                result[method] = f"{sig}\n{doc}"
+        return result
 
     def perform_action(self, action_name, *args, **kwargs):
         if self.actions is None:
@@ -121,11 +125,15 @@ class OpenRCATask(Task):
         raise InvalidActionError(action_name)
 
     def eval(self, soln: Any, trace: list[SessionItem], duration: float):
-        prediction = json.dumps(soln) if isinstance(soln, dict) else str(soln)
-        passing, failing, score = openrca_evaluate(prediction, self.scoring_points)
+        soln_str = json.dumps(soln) if not isinstance(soln, str) else soln
+        passing, failing, score = openrca_evaluate(soln_str, self.scoring_points)
         self.add_result("score", score)
         self.add_result("passing_criteria", passing)
         self.add_result("failing_criteria", failing)
+        self.add_result("ground_truth", self.scoring_points)
+        query_info = getattr(self.app, "query_info", None)
+        if query_info and query_info.faults:
+            self.add_result("record", query_info.faults)
         self.add_result("task_type", self.task_type)
         self.add_result("difficulty", get_task_difficulty(self.task_type))
         self.add_result("TTA", duration)

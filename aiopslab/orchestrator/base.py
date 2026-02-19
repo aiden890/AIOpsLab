@@ -19,7 +19,7 @@ def exit_cleanup_fault(prob):
 class BaseOrchestrator:
     """Base class for orchestrators. Contains agent-environment loop and session management."""
 
-    def __init__(self, results_dir=None):
+    def __init__(self, results_dir=None, eval_id=None):
         self.agent = None
         self.session = None
         self.parser = ResponseParser()
@@ -28,6 +28,7 @@ class BaseOrchestrator:
         self.execution_end_time = None
         self.use_wandb = os.getenv("USE_WANDB", "false").lower() == "true"
         self.results_dir = results_dir
+        self.eval_id = eval_id
 
     def register_agent(self, agent, name="agent"):
         """Register the agent for the current session."""
@@ -89,7 +90,7 @@ class BaseOrchestrator:
         """Initialize a problem instance for the agent to solve."""
         self.execution_start_time = time.time()
 
-        self.session = Session(results_dir=self.results_dir)
+        self.session = Session(results_dir=self.results_dir, eval_id=self.eval_id)
         print(f"Session ID: {self.session.session_id}")
 
         prob = self.probs.get_problem_instance(problem_id)
@@ -120,6 +121,8 @@ class BaseOrchestrator:
         instructions = prob.get_instructions()
         actions = prob.get_available_actions()
 
+        self._problem_init_info = (task_desc, instructions, actions)
+
         return task_desc, instructions, actions
 
     async def start_problem(self, max_steps: int):
@@ -132,6 +135,17 @@ class BaseOrchestrator:
         # Initialize log file for session
         log_filepath = self.session.get_filepath(file_type="log")
         self.sprint.init_log_file(str(log_filepath))
+
+        # Print problem initialization info
+        if hasattr(self, '_problem_init_info'):
+            task_desc, instructions, actions = self._problem_init_info
+            self.sprint.problem_init(task_desc, instructions, actions)
+
+        # Print full system prompt sent to the agent
+        if hasattr(self, '_system_message'):
+            self.sprint.system_prompt(self._system_message)
+
+        self.sprint.step_count = 0
 
         try:
             for step in range(max_steps):

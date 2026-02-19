@@ -6,6 +6,7 @@
 
 import os
 import json
+import time
 import yaml
 from groq import Groq
 from pathlib import Path
@@ -13,7 +14,7 @@ from typing import Optional, List, Dict
 from dataclasses import dataclass
 
 from groq import Groq
-from openai import OpenAI, AzureOpenAI
+from openai import OpenAI, AzureOpenAI, RateLimitError
 from azure.identity import get_bearer_token_provider, AzureCliCredential, ManagedIdentityCredential
 
 from dotenv import load_dotenv
@@ -137,22 +138,34 @@ class GPTClient:
             if cache_result is not None:
                 return cache_result
 
-        try:
-            response = self.client.chat.completions.create(
-                messages=payload,  # type: ignore
-                model=GPT_MODEL,
-                max_tokens=1024,
-                temperature=0.5,
-                top_p=0.95,
-                frequency_penalty=0.0,
-                presence_penalty=0.0,
-                n=1,
-                timeout=60,
-                stop=[],
-            )
-        except Exception as e:
-            print(f"Exception: {repr(e)}")
-            raise e
+        max_retries = 5
+        wait = 5
+        for attempt in range(max_retries):
+            try:
+                response = self.client.chat.completions.create(
+                    messages=payload,  # type: ignore
+                    model=GPT_MODEL,
+                    max_tokens=1024,
+                    temperature=0.5,
+                    top_p=0.95,
+                    frequency_penalty=0.0,
+                    presence_penalty=0.0,
+                    n=1,
+                    timeout=60,
+                    stop=[],
+                )
+                break
+            except RateLimitError as e:
+                if attempt < max_retries - 1:
+                    print(f"Rate limit reached. Retrying in {wait}s... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(wait)
+                    wait *= 2
+                else:
+                    print(f"Rate limit exceeded after {max_retries} attempts.")
+                    raise e
+            except Exception as e:
+                print(f"Exception: {repr(e)}")
+                raise e
 
         return [c.message.content for c in response.choices]  # type: ignore
 
