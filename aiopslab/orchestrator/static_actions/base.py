@@ -204,7 +204,12 @@ class StaticTaskActions:
             return f"error: Log file '{file_path}' not found."
         try:
             df = pd.read_csv(file_path)
-            return df.to_string(index=False)
+            total = len(df)
+            page = df.iloc[offset: offset + limit]
+            header = f"Showing rows {offset}–{offset + len(page) - 1} of {total} total"
+            if offset + limit < total:
+                header += f" (use offset={offset + limit} for next page)"
+            return header + "\n" + page.to_string(index=False)
         except Exception as e:
             return f"Failed to read logs: {str(e)}"
 
@@ -216,7 +221,12 @@ class StaticTaskActions:
             return f"error: Metrics file '{file_path}' not found."
         try:
             df = pd.read_csv(file_path)
-            return df.to_string(index=False)
+            total = len(df)
+            page = df.iloc[offset: offset + limit]
+            header = f"Showing rows {offset}–{offset + len(page) - 1} of {total} total"
+            if offset + limit < total:
+                header += f" (use offset={offset + limit} for next page)"
+            return header + "\n" + page.to_string(index=False)
         except Exception as e:
             return f"Failed to read metrics: {str(e)}"
 
@@ -228,7 +238,12 @@ class StaticTaskActions:
             return f"error: Traces file '{file_path}' not found."
         try:
             df = pd.read_csv(file_path)
-            return df.to_string(index=False)
+            total = len(df)
+            page = df.iloc[offset: offset + limit]
+            header = f"Showing rows {offset}–{offset + len(page) - 1} of {total} total"
+            if offset + limit < total:
+                header += f" (use offset={offset + limit} for next page)"
+            return header + "\n" + page.to_string(index=False)
         except Exception as e:
             return f"Failed to read traces: {str(e)}"
 
@@ -290,9 +305,11 @@ class StaticTaskActions:
             if re.search(pattern, command):
                 return f"Error: {error_msg}"
 
-        # Extract potential file paths from command
-        # Look for absolute paths
-        absolute_paths = re.findall(r'/[a-zA-Z0-9_\-/.]+', command)
+        # Extract potential file paths from command.
+        # Only flag /path that starts at a word boundary (genuine absolute paths),
+        # not slashes inside relative paths like static_traces_output/traces.csv
+        # or awk expressions like sum/NR.
+        absolute_paths = re.findall(r'(?<!\w)/[a-zA-Z0-9_\-/.]+', command)
         if absolute_paths:
             return (
                 f"Error: Absolute paths are not allowed.\n"
