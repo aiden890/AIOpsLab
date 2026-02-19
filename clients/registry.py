@@ -5,10 +5,11 @@ from clients.qwen import QwenAgent
 from clients.deepseek import DeepSeekAgent
 from clients.vllm import vLLMAgent
 from clients.openrouter import OpenRouterAgent
+from clients.openrca_rca import OpenRCARCAAgent
 
 class AgentRegistry:
     """Registry for agent implementations."""
-    
+
     def __init__(self):
         self.AGENT_REGISTRY = {
             "gpt": GPTAgent,
@@ -16,6 +17,7 @@ class AgentRegistry:
             "deepseek": DeepSeekAgent,
             "vllm": vLLMAgent,
             "openrouter": OpenRouterAgent,
+            "openrca-rca": OpenRCARCAAgent,
         }
     
     def register(self, name, agent_cls):

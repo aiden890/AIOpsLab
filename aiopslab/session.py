@@ -31,6 +31,7 @@ class Session:
         self.start_time = None
         self.end_time = None
         self.agent_name = None
+        self.extra = {}
         self.model_name = None
         self.results_dir = Path(results_dir) if isinstance(results_dir, str) else results_dir
 
@@ -123,6 +124,7 @@ class Session:
             "trace": [item.model_dump() for item in self.history],
             "results": self.results,
         }
+        summary.update(self.extra)
 
         return summary
 
