@@ -18,15 +18,20 @@ Usage:
 
 import argparse
 import asyncio
+import csv
 import sys
+import uuid
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import tiktoken
+from IPython.terminal.embed import InteractiveShellEmbed
 from aiopslab.orchestrator.static_orchestrator import StaticOrchestrator
 from clients.utils.llm import GPTClient
-from clients.utils.templates import DOCS
+from clients.utils.templates import DOCS_WITH_POSSIBLE_ROOT_CAUSES
+from clients.openrca_rca.telemetry_helper import TelemetryHelper
 
 RESP_INSTR = """Please avoid repeating previous actions. Respond with:
 Thought: <your analysis of the previous output>
@@ -75,7 +80,7 @@ class Agent:
         """Return the model name used by this agent."""
         return self.llm.get_model_name()
 
-    def init_context(self, problem_desc: str, instructions: str, apis: str):
+    def init_context(self, problem_desc: str, instructions: str, apis: str, possible_rca: dict = None):
         self.shell_api = self._filter_dict(apis, lambda k, _: "exec_shell" in k)
         self.submit_api = self._filter_dict(apis, lambda k, _: "submit" in k)
         self.telemetry_apis = self._filter_dict(
@@ -83,14 +88,15 @@ class Agent:
         )
 
         stringify_apis = lambda apis: "\n\n".join(
-            [f"{k}\n{v}" for k, v in apis.items()]
+            [f"{k}{v}" for k, v in apis.items()]
         )
 
-        self.system_message = DOCS.format(
+        self.system_message = DOCS_WITH_POSSIBLE_ROOT_CAUSES.format(
             prob_desc=problem_desc,
             telemetry_apis=stringify_apis(self.telemetry_apis),
             shell_api=stringify_apis(self.shell_api),
             submit_api=stringify_apis(self.submit_api),
+            possible_root_causes=self._format_possible_rca(possible_rca),
         )
 
         self.task_message = instructions
@@ -103,13 +109,104 @@ class Agent:
         trimmed_history = trim_history_to_token_limit(self.history)
         response = self.llm.run(trimmed_history)
         self.history.append({"role": "assistant", "content": response[0]})
+
         return response[0]
 
     def _filter_dict(self, dictionary, filter_func):
         return {k: v for k, v in dictionary.items() if filter_func(k, v)}
 
+    def _format_possible_rca(self, prc: dict) -> str:
+        if not prc:
+            return ""
+        lines = []
+        levels = prc.get("component_levels", {})
+        components = prc.get("components", [])
+        reasons = prc.get("reasons", [])
+
+        lines.append("## POSSIBLE ROOT CAUSE COMPONENTS:")
+        if levels:
+            if levels.get("node"):
+                lines.append("\n(node level)")
+                lines.extend(f"- {c}" for c in levels["node"])
+            if levels.get("pod"):
+                lines.append("\n(pod level)")
+                lines.extend(f"- {c}" for c in levels["pod"])
+            if levels.get("service"):
+                lines.append("\n(service level)")
+                lines.extend(f"- {c}" for c in levels["service"])
+        else:
+            lines.extend(f"- {c}" for c in components)
+
+        lines.append("\n## POSSIBLE ROOT CAUSE REASONS:")
+        lines.extend(f"- {r}" for r in reasons)
+
+        return "\n".join(lines)
+
     def _add_instr(self, input):
         return input + "\n\n" + RESP_INSTR
+
+
+def setup_executor(actions_obj, namespace):
+    """Create an IPython kernel and inject a Python code executor into the actions object.
+
+    The react agent writes Python code directly, so we run it in IPython and
+    return the result — no LLM code-generation step needed.
+    """
+    kernel = InteractiveShellEmbed()
+    helper = TelemetryHelper(actions_obj, namespace)
+    kernel.push({"telemetry": helper})
+    kernel.run_cell(
+        "import pandas as pd\n"
+        "pd.set_option('display.width', 427)\n"
+        "pd.set_option('display.max_columns', 10)\n"
+    )
+
+    def _run_code(code: str) -> str:
+        exec_result = kernel.run_cell(code)
+        if exec_result.success:
+            out = str(exec_result.result).strip() if exec_result.result is not None else ""
+            return out if out else "(code executed successfully, no output)"
+        else:
+            import traceback as tb
+            err = "".join(tb.format_exception(
+                type(exec_result.error_in_exec),
+                exec_result.error_in_exec,
+                exec_result.error_in_exec.__traceback__,
+            ))
+            return f"Execution error:\n{err}"
+
+    actions_obj.set_executor(_run_code)
+    return kernel
+
+
+SCORE_FIELDS = [
+    "timestamp", "eval_id", "model", "problem_id",
+    "task_type", "difficulty", "score", "success", "steps",
+    "TTA", "in_tokens", "out_tokens",
+]
+
+
+def append_score(scores_path: Path, eval_id: str, model: str, pid: str, results: dict):
+    """Append one row to the scores CSV for this eval run."""
+    is_new = not scores_path.exists()
+    with open(scores_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=SCORE_FIELDS, extrasaction="ignore")
+        if is_new:
+            writer.writeheader()
+        writer.writerow({
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "eval_id": eval_id,
+            "model": model,
+            "problem_id": pid,
+            "task_type": results.get("task_type", ""),
+            "difficulty": results.get("difficulty", ""),
+            "score": results.get("score", ""),
+            "success": results.get("success", ""),
+            "steps": results.get("steps", ""),
+            "TTA": round(results.get("TTA", 0), 2),
+            "in_tokens": results.get("in_tokens", ""),
+            "out_tokens": results.get("out_tokens", ""),
+        })
 
 
 def parse_args():
@@ -119,6 +216,7 @@ def parse_args():
     parser.add_argument("--task-type", type=str, help="Filter by task type (e.g. task_1, task_7)")
     parser.add_argument("--max-steps", type=int, default=30, help="Max agent steps (default: 30)")
     parser.add_argument("--results-dir", type=str, default="results/static_problems")
+    parser.add_argument("--eval-id", type=str, default=None, help="Eval run identifier (default: auto UUID)")
     return parser.parse_args()
 
 
@@ -127,7 +225,8 @@ if __name__ == "__main__":
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    orchestrator = StaticOrchestrator(results_dir=str(results_dir))
+    eval_id = args.eval_id or uuid.uuid4().hex[:8]
+    orchestrator = StaticOrchestrator(results_dir=str(results_dir), eval_id=eval_id)
 
     # Select problems to run
     if args.problem:
@@ -138,8 +237,12 @@ if __name__ == "__main__":
             dataset=args.dataset,
         )
 
+    scores_path = results_dir / f"{eval_id}_scores.csv"
+
     print(f"Running {len(problem_ids)} problems")
-    print(f"Results dir: {results_dir}\n")
+    print(f"Results dir: {results_dir}")
+    print(f"Eval ID: {eval_id}")
+    print(f"Scores file: {scores_path}\n")
 
     for pid in problem_ids:
         print(f"\n{'='*60}")
@@ -149,9 +252,16 @@ if __name__ == "__main__":
         agent = Agent()
         orchestrator.register_agent(agent, name="react-static")
 
+        kernel = None
         try:
             problem_desc, instructs, apis = orchestrator.init_problem(pid)
-            agent.init_context(problem_desc, instructs, apis)
+            problem = orchestrator.session.problem
+            possible_rca = problem.app.dataset_config.get("possible_root_causes")
+            agent.init_context(problem_desc, instructs, apis, possible_rca=possible_rca)
+            orchestrator._system_message = agent.system_message
+
+            # Inject IPython executor so the execute() action works
+            kernel = setup_executor(problem._actions, problem.namespace)
 
             # Print initial problem setup
             orchestrator.sprint.problem_init(problem_desc, instructs, apis)
@@ -159,15 +269,16 @@ if __name__ == "__main__":
             full_output = asyncio.run(orchestrator.start_problem(max_steps=args.max_steps))
             results = full_output.get("results", {})
 
-            # Session already saved with descriptive name
-            print(f"\nSession saved by orchestrator")
-            print(f"Score: {results.get('score', 'N/A')}")
-            print(f"Success: {results.get('success', 'N/A')}")
+            append_score(scores_path, eval_id, agent.get_model_name(), pid, results)
+            print(f"\nScore: {results.get('score', 'N/A')}  Success: {results.get('success', 'N/A')}")
 
         except Exception as e:
             print(f"\nError running {pid}: {e}")
             import traceback
             traceback.print_exc()
+        finally:
+            if kernel is not None:
+                kernel.reset()
 
     print(f"\n{'='*60}")
     print(f"Done! {len(problem_ids)} problems completed.")
