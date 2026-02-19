@@ -29,7 +29,7 @@
   "replay": {
     "pre_buffer_minutes": 30,
     "post_buffer_minutes": 30,
-    "streaming_interval_seconds": 30,
+    "streaming_interval_seconds": 5,
     "speed_factor": 1.0
   },
 
@@ -57,5 +57,39 @@
     "redis_007", "redis_008", "redis_009", "redis_010", "redis_011", "redis_012"
   ],
 
-  "use_docker_replayer": false
+  "possible_root_causes": {
+    "components": [
+      "os_001", "os_002", "os_003", "os_004", "os_005", "os_006",
+      "os_007", "os_008", "os_009", "os_010", "os_011", "os_012",
+      "os_013", "os_014", "os_015", "os_016", "os_017", "os_018",
+      "os_019", "os_020", "os_021", "os_022",
+      "docker_001", "docker_002", "docker_003", "docker_004",
+      "docker_005", "docker_006", "docker_007", "docker_008",
+      "db_001", "db_002", "db_003", "db_004", "db_005", "db_006",
+      "db_007", "db_008", "db_009", "db_010", "db_011", "db_012", "db_013"
+    ],
+    "component_levels": {
+      "node": [
+        "os_001", "os_002", "os_003", "os_004", "os_005", "os_006",
+        "os_007", "os_008", "os_009", "os_010", "os_011", "os_012",
+        "os_013", "os_014", "os_015", "os_016", "os_017", "os_018",
+        "os_019", "os_020", "os_021", "os_022"
+      ],
+      "pod": [
+        "docker_001", "docker_002", "docker_003", "docker_004",
+        "docker_005", "docker_006", "docker_007", "docker_008"
+      ],
+      "service": [
+        "db_001", "db_002", "db_003", "db_004", "db_005", "db_006",
+        "db_007", "db_008", "db_009", "db_010", "db_011", "db_012", "db_013"
+      ]
+    },
+    "reasons": [
+      "CPU fault",
+      "network delay",
+      "network loss",
+      "db connection limit",
+      "db close"
+    ]
+  }
 }
