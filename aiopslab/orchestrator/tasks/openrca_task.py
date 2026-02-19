@@ -4,6 +4,7 @@ All 7 OpenRCA task types (task_1~task_7) use the same submit format
 and evaluation logic. This replaces per-type Detection/Localization/Analysis.
 """
 
+import json
 import textwrap
 from typing import Any
 
@@ -120,7 +121,8 @@ class OpenRCATask(Task):
         raise InvalidActionError(action_name)
 
     def eval(self, soln: Any, trace: list[SessionItem], duration: float):
-        passing, failing, score = openrca_evaluate(str(soln), self.scoring_points)
+        prediction = json.dumps(soln) if isinstance(soln, dict) else str(soln)
+        passing, failing, score = openrca_evaluate(prediction, self.scoring_points)
         self.add_result("score", score)
         self.add_result("passing_criteria", passing)
         self.add_result("failing_criteria", failing)
