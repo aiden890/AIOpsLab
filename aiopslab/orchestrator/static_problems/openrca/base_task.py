@@ -23,17 +23,28 @@ class OpenRCABaseTask:
         self.namespace = self.app.namespace
         self.query_index = query_index
 
-        # Load query row directly for task setup
-        query_file = self.app.dataset_path / self.app.dataset_config.get(
-            "query", {}
-        ).get("query_file", "query.csv")
-        query_df = pd.read_csv(query_file)
-        self.query_row = query_df.iloc[query_index].to_dict()
+        # Use UTC-converted instruction/scoring_points from query_info (set by dataset.py)
+        # Falls back to raw CSV if query_info is unavailable
+        if self.app.query_info:
+            meta = self.app.query_info.metadata
+            self.query_row = {
+                "task_index": self.app.query_info.task_id,
+                "instruction": meta.get("instruction", ""),
+                "scoring_points": meta.get("scoring_points", ""),
+            }
+        else:
+            query_file = self.app.dataset_path / self.app.dataset_config.get(
+                "query", {}
+            ).get("query_file", "query.csv")
+            query_df = pd.read_csv(query_file)
+            self.query_row = query_df.iloc[query_index].to_dict()
+
         self.task_type = self.query_row["task_index"]
 
         # Set up actions that read from the Docker container
         self._actions = StaticRCAActions(
-            container_name=self.app.get_container_name()
+            container_name=self.app.get_container_name(),
+            possible_root_causes=self.app.dataset_config.get("possible_root_causes"),
         )
 
     def start_workload(self):
