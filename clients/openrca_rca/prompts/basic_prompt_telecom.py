@@ -60,14 +60,12 @@ cand = """## POSSIBLE ROOT CAUSE REASONS:
 - db_012
 - db_013"""
 
-schema = f"""## TELEMETRY DATA ACCESS:
+# ---------------------------------------------------------------------------
+# Schema sections (assembled by build_schema)
+# ---------------------------------------------------------------------------
 
-- Use `telemetry.get_logs()`, `telemetry.get_metrics()`, `telemetry.get_traces()` to fetch data.
-- Each returns a directory path. Read CSVs from there (e.g., `pd.read_csv(f"{{dir}}/metrics.csv")`).
-
-## DATA SCHEMA
-
-1.  **Metric columns** (in metrics.csv):
+_METRIC_SCHEMA = """\
+**Metric columns** (in metrics.csv):
 
     - App metrics:
         ```csv
@@ -97,26 +95,96 @@ schema = f"""## TELEMETRY DATA ACCESS:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
         999999998650974,MEM_Total,ZJ-002-055,1586534694000,381.902264,db_003
-        ```
+        ```"""
 
-2.  **Trace columns** (in traces.csv):
+_TRACE_SCHEMA = """\
+**Trace columns** (in traces.csv):
 
     ```csv
     callType,startTime,elapsedTime,success,traceId,id,pid,cmdb_id,dsName,serviceName
     JDBC,1586534400335,2.0,True,01df517164d1c0365586,407d617164d1c14f2613,6e02217164d1c14b2607,docker_006,db_003,
-    ```
+    ```"""
 
-{cand}
 
-## CLARIFICATION OF TELEMETRY DATA:
+def build_schema(condition="all"):
+    """Build schema string with telemetry sections filtered by ablation condition.
 
-1. This service system is a telecom database system.
+    Args:
+        condition: "all", "no_log", "no_metric", or "no_trace"
+    """
+    enable_log = condition != "no_log"
+    enable_metric = condition != "no_metric"
+    enable_trace = condition != "no_trace"
 
-2. The `metric_app` data only contains five KPIs: startTime, avg_time, num, succee_num, succee_rate. In contrast, other metrics record a variety of KPIs, such as CPU usage and memory usage. The specific names of these KPIs can be found in the `name` field.
+    # 1. Telemetry access (telecom has no log data schema, but keep access func if enabled)
+    funcs = []
+    if enable_log:
+        funcs.append("`telemetry.get_logs()`")
+    if enable_metric:
+        funcs.append("`telemetry.get_metrics()`")
+    if enable_trace:
+        funcs.append("`telemetry.get_traces()`")
 
-3. In all telemetry files, the timestamp units and cmdb_id formats remain consistent:
+    # Use first available function as example
+    example_func = funcs[0].strip("`") if funcs else "telemetry.get_metrics()"
 
-- Metric: Timestamp units are in milliseconds (e.g., 1586534423000).
-- Trace: Timestamp units are in milliseconds (e.g., 1586534400335).
+    sections = []
+    sections.append(
+        f"## TELEMETRY DATA ACCESS:\n\n"
+        f"- Use {', '.join(funcs)} to fetch data.\n"
+        f"- Each returns a file path to a CSV. Read it directly "
+        f"(e.g., `pd.read_csv({example_func})`)."
+    )
 
-4. Please use the UTC+8 time zone in all analysis steps since system is deployed in China/Hong Kong/Singapore."""
+    # 2. Data schema (telecom has no log schema)
+    data_items = []
+    n = 1
+    if enable_metric:
+        data_items.append(f"{n}.  {_METRIC_SCHEMA}")
+        n += 1
+    if enable_trace:
+        data_items.append(f"{n}.  {_TRACE_SCHEMA}")
+        n += 1
+    if data_items:
+        sections.append("## DATA SCHEMA\n\n" + "\n\n".join(data_items))
+
+    # 3. Candidates
+    sections.append(cand)
+
+    # 4. Clarification
+    cl = []
+    cn = 1
+    cl.append(f"## CLARIFICATION OF TELEMETRY DATA:\n\n"
+              f"{cn}. This service system is a telecom database system.")
+    cn += 1
+
+    if enable_metric:
+        cl.append(
+            f"\n\n{cn}. The `metric_app` data only contains five KPIs: startTime, avg_time, "
+            f"num, succee_num, succee_rate. In contrast, other metrics record a variety of "
+            f"KPIs, such as CPU usage and memory usage. The specific names of these KPIs "
+            f"can be found in the `name` field.")
+        cn += 1
+
+    timestamps = []
+    if enable_metric:
+        timestamps.append("- Metric: Timestamp units are in milliseconds (e.g., 1586534423000).")
+    if enable_trace:
+        timestamps.append("- Trace: Timestamp units are in milliseconds (e.g., 1586534400335).")
+    if timestamps:
+        cl.append(
+            f"\n\n{cn}. In all telemetry files, the timestamp units and cmdb_id formats "
+            f"remain consistent:\n\n" + "\n".join(timestamps))
+        cn += 1
+
+    cl.append(
+        f"\n\n{cn}. Please use the UTC+8 time zone in all analysis steps "
+        f"since system is deployed in China/Hong Kong/Singapore.")
+
+    sections.append("".join(cl))
+
+    return "\n\n".join(sections)
+
+
+# Default schema (all types) for backward compatibility
+schema = build_schema("all")

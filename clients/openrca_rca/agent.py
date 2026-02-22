@@ -101,7 +101,7 @@ class OpenRCARCAAgent:
         self.controller_prompt = []
         self.step = 0
 
-    def set_actions(self, actions_obj, namespace, dataset_key, max_steps=25):
+    def set_actions(self, actions_obj, namespace, dataset_key, max_steps=25, condition="all"):
         """Initialize Executor and inject it into the actions object.
 
         Args:
@@ -134,7 +134,7 @@ class OpenRCARCAAgent:
                 objective=self.problem_desc,
                 format=RESPONSE_FORMAT,
                 agent=controller_rules,
-                background=self.basic_prompt.schema,
+                background=self.basic_prompt.build_schema(condition),
             )},
             {"role": "user", "content": "Let's begin."},
         ]

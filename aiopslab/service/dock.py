@@ -23,16 +23,22 @@ class Docker:
         """Get logs for a container."""
         return self.get_container(container_id).logs().decode("utf-8")
 
-    def compose_up(self, cwd, env=None, build=False):
+    def compose_up(self, cwd, env=None, build=False, project_name=None):
         """Run docker-compose up in detached mode."""
-        command = "docker compose up -d"
+        command = "docker compose"
+        if project_name:
+            command += f" -p {project_name}"
+        command += " up -d"
         if build:
             command += " --build"
         return self.exec_command(command, cwd=cwd, env=env)
 
-    def compose_down(self, cwd, env=None):
+    def compose_down(self, cwd, env=None, project_name=None):
         """Run docker-compose down."""
-        command = "docker compose down"
+        command = "docker compose"
+        if project_name:
+            command += f" -p {project_name}"
+        command += " down"
         return self.exec_command(command, cwd=cwd, env=env)
 
     def cleanup(self):
