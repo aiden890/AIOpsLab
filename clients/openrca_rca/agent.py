@@ -114,6 +114,7 @@ class OpenRCARCAAgent:
         self.dataset_key = dataset_key
         self.max_steps = max_steps
         self.orchestrator_step = 0
+        self.condition = condition
         self.basic_prompt = get_basic_prompt(dataset_key)
 
         # Initialize IPython kernel with telemetry helper
@@ -149,7 +150,7 @@ class OpenRCARCAAgent:
         """
         code, result, status, self.executor_history = execute_act(
             instruction,
-            self.basic_prompt.schema,
+            self.basic_prompt.build_schema(self.condition),
             self.executor_history,
             self.kernel,
             self.configs,

@@ -63,9 +63,6 @@ class StaticTaskActions:
             str: Path to the saved log file (CSV format).
         """
         df = self.static_app.fetch_logs_df(namespace, service)
-        if df.empty:
-            filter_msg = f" for service '{service}'" if service else ""
-            return f"No logs found{filter_msg} in namespace '{namespace}'"
 
         save_dir = os.path.join(self.work_dir, "static_logs_output")
         os.makedirs(save_dir, exist_ok=True)
@@ -87,15 +84,12 @@ class StaticTaskActions:
             str: Path to the saved metrics file (CSV format).
         """
         df = self.static_app.fetch_metrics_df(namespace, duration)
-        if df.empty:
-            return f"No metrics found for namespace '{namespace}'"
 
         save_dir = os.path.join(self.work_dir, "static_metrics_output")
         os.makedirs(save_dir, exist_ok=True)
         file_path = os.path.join(save_dir, "metrics.csv")
         df.to_csv(file_path, index=False)
 
-        print(f"Metrics data saved to: {file_path}")
         return file_path
 
     @read
@@ -111,15 +105,12 @@ class StaticTaskActions:
             str: Path to the saved traces file (CSV format).
         """
         df = self.static_app.fetch_traces_df(namespace, duration)
-        if df.empty:
-            return f"No traces found for namespace '{namespace}'"
 
         save_dir = os.path.join(self.work_dir, "static_traces_output")
         os.makedirs(save_dir, exist_ok=True)
         file_path = os.path.join(save_dir, "traces.csv")
         df.to_csv(file_path, index=False)
 
-        print(f"Trace data saved to: {file_path}")
         return file_path
 
     # ----- read_* : read a saved local CSV file → return data -----

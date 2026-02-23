@@ -49,6 +49,7 @@ class SessionPrint:
             # Create parent directories if needed
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
             self.log_file = open(filepath, 'w', encoding='utf-8')
+            self.step_count = 0
 
             # Attach Python logging FileHandler to the same file
             # so executor/agent debug logs also go to the session log

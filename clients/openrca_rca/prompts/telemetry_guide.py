@@ -5,13 +5,16 @@ Describes how the Controller-Executor architecture accesses telemetry data.
 """
 
 
-def build_telemetry_guide(condition="all"):
-    """Build telemetry guide filtered by ablation condition.
+def build_telemetry_guide(condition="all", dataset_key=None):
+    """Build telemetry guide filtered by ablation condition and dataset.
 
     Args:
         condition: "all", "no_log", "no_metric", or "no_trace"
+        dataset_key: Dataset identifier (e.g., "telecom"). Telecom has no log data.
     """
-    enable_log = condition != "no_log"
+    # Telecom dataset has no log data regardless of condition
+    has_logs = dataset_key != "telecom"
+    enable_log = has_logs and condition != "no_log"
     enable_metric = condition != "no_metric"
     enable_trace = condition != "no_trace"
 

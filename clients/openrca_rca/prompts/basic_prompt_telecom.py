@@ -112,11 +112,12 @@ def build_schema(condition="all"):
     Args:
         condition: "all", "no_log", "no_metric", or "no_trace"
     """
-    enable_log = condition != "no_log"
+    # Telecom dataset has NO log data (only metric + trace)
+    enable_log = False
     enable_metric = condition != "no_metric"
     enable_trace = condition != "no_trace"
 
-    # 1. Telemetry access (telecom has no log data schema, but keep access func if enabled)
+    # 1. Telemetry access
     funcs = []
     if enable_log:
         funcs.append("`telemetry.get_logs()`")

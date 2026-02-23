@@ -110,13 +110,13 @@ if __name__ == "__main__":
 
             # Override telemetry guide with RCA agent's version and regenerate
             problem = orchestrator.session.problem
-            problem.telemetry_guide = build_telemetry_guide(args.condition)
+            dataset_key = extract_dataset_key(pid)
+            problem.telemetry_guide = build_telemetry_guide(args.condition, dataset_key=dataset_key)
             problem_desc = problem.get_task_description()
 
             agent.init_context(problem_desc, instructs, apis)
 
             # 2. Inject Executor callback into the actions object
-            dataset_key = extract_dataset_key(pid)
             agent.set_actions(problem._actions, problem.namespace, dataset_key,
                               max_steps=args.max_steps, condition=args.condition)
 

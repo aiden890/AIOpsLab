@@ -27,14 +27,21 @@ Use it to fetch raw telemetry data from the environment:
     metrics_path = telemetry.get_metrics()
     traces_path = telemetry.get_traces()
 
-Each call returns a **file path** (not a directory). Read it directly with pandas:
+Each call returns a **file path** (str) or **None** if no data is available.
+Always check for None before reading:
 
     import pandas as pd
-    log_df = pd.read_csv(logs_path)
-    metric_df = pd.read_csv(metrics_path)
-    trace_df = pd.read_csv(traces_path)
+    logs_path = telemetry.get_logs()
+    log_df = pd.read_csv(logs_path) if logs_path else pd.DataFrame()
+
+    metrics_path = telemetry.get_metrics()
+    metric_df = pd.read_csv(metrics_path) if metrics_path else pd.DataFrame()
+
+    traces_path = telemetry.get_traces()
+    trace_df = pd.read_csv(traces_path) if traces_path else pd.DataFrame()
 
 IMPORTANT: Do NOT append filenames to the path. The returned value is already the full CSV file path.
+IMPORTANT: Always check if the return value is None before calling pd.read_csv().
 Note: Call telemetry.get_*() only once per data type, then reuse the cached DataFrame variable."""
 
 

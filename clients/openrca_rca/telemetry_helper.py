@@ -4,12 +4,16 @@ Executor-generated Python code calls telemetry.get_*() to fetch raw data
 from AIOpsLab's static actions, then reads the resulting CSV files with pandas.
 """
 
+import os
+
 
 class TelemetryHelper:
     """Wraps StaticRCAActions methods for use inside IPython kernel.
 
     Injected as `telemetry` variable so Executor code can call:
         telemetry.get_logs(), telemetry.get_metrics(), telemetry.get_traces()
+
+    Returns file path (str) or None if no data is available.
     """
 
     def __init__(self, actions_obj, namespace):
@@ -21,31 +25,44 @@ class TelemetryHelper:
         self._actions = actions_obj
         self._ns = namespace
 
-    def get_logs(self, service=None):
-        """Fetch logs → save to local CSV → return directory path.
+    @staticmethod
+    def _check_empty(file_path):
+        """Return None if the CSV file is empty (no data), else return path."""
+        try:
+            if not os.path.exists(file_path):
+                return None
+            if os.path.getsize(file_path) <= 1:
+                return None
+            return file_path
+        except Exception:
+            return None
 
-        Usage in IPython:
-            logs_dir = telemetry.get_logs()
-            df = pd.read_csv(f"{logs_dir}/logs.csv")
+    def get_logs(self, service=None):
+        """Fetch logs → save to local CSV → return file path or None.
+
+        Returns:
+            str: File path to CSV, or None if no log data is available.
         """
         if service:
-            return self._actions.get_logs(self._ns, service)
-        return self._actions.get_logs(self._ns)
+            path = self._actions.get_logs(self._ns, service)
+        else:
+            path = self._actions.get_logs(self._ns)
+        return self._check_empty(path)
 
     def get_metrics(self, duration=5):
-        """Fetch metrics → save to local CSV → return directory path.
+        """Fetch metrics → save to local CSV → return file path or None.
 
-        Usage in IPython:
-            metrics_dir = telemetry.get_metrics()
-            df = pd.read_csv(f"{metrics_dir}/metrics.csv")
+        Returns:
+            str: File path to CSV, or None if no metric data is available.
         """
-        return self._actions.get_metrics(self._ns, duration)
+        path = self._actions.get_metrics(self._ns, duration)
+        return self._check_empty(path)
 
     def get_traces(self, duration=5):
-        """Fetch traces → save to local CSV → return directory path.
+        """Fetch traces → save to local CSV → return file path or None.
 
-        Usage in IPython:
-            traces_dir = telemetry.get_traces()
-            df = pd.read_csv(f"{traces_dir}/traces.csv")
+        Returns:
+            str: File path to CSV, or None if no trace data is available.
         """
-        return self._actions.get_traces(self._ns, duration)
+        path = self._actions.get_traces(self._ns, duration)
+        return self._check_empty(path)
