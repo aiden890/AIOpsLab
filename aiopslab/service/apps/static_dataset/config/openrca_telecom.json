@@ -10,6 +10,10 @@
     "enable_metric": true
   },
 
+  "executor": {
+    "enable": true
+  },
+
   "query": {
     "enable": true,
     "query_file": "query.csv",

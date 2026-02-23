@@ -29,7 +29,7 @@ cand = """## POSSIBLE ROOT CAUSE REASONS:
 schema = f"""## TELEMETRY DATA ACCESS:
 
 - Use `telemetry.get_logs()`, `telemetry.get_metrics()`, `telemetry.get_traces()` to fetch data.
-- Each returns a directory path. Read CSVs from there (e.g., `pd.read_csv(f"{{dir}}/metrics.csv")`).
+- Each returns full file path. Read CSVs from there (e.g., `pd.read_csv(f"{{metrics_path}}")`).
 
 ## DATA SCHEMA
 
@@ -51,7 +51,7 @@ schema = f"""## TELEMETRY DATA ACCESS:
 
     ```csv
     timestamp,cmdb_id,parent_id,span_id,trace_id,duration
-    1614787199628,dockerA2,369-bcou-dle-way1-c514cf30-43410@0824-2f0e47a816-17492,21030300016145905763,gw0120210304000517192504,19
+    1614787199,dockerA2,369-bcou-dle-way1-c514cf30-43410@0824-2f0e47a816-17492,21030300016145905763,gw0120210304000517192504,19
     ```
 
 3.  **Log columns** (in logs.csv):
@@ -69,10 +69,5 @@ schema = f"""## TELEMETRY DATA ACCESS:
 
 2. The app metrics only contain four KPIs: rr, sr, cnt, and mrt. In contrast, container metrics record a variety of KPIs such as CPU usage and memory usage. The specific names of these KPIs can be found in the `kpi_name` field.
 
-3. In different telemetry files, the timestamp units may vary:
-
-- Metric: Timestamp units are in seconds (e.g., 1614787440).
-- Trace: Timestamp units are in milliseconds (e.g., 1614787199628).
-- Log: Timestamp units are in seconds (e.g., 1614787201).
-
-4. Please use the UTC+8 time zone in all analysis steps since system is deployed in China/Hong Kong/Singapore."""
+3. In different telemetry files, the timestamp units are all in seconds:
+"""

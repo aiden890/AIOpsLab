@@ -20,20 +20,54 @@ from aiopslab.orchestrator.evaluators.openrca_eval import (
 )
 
 
-DEFAULT_TELEMETRY_GUIDE = """\
-How to access telemetry data:
-Step 1 - Fetch: Use get_logs/get_metrics/get_traces to save data locally.
-  e.g., get_logs("{namespace}") or get_logs("{namespace}", "<service>")
-Step 2 - Read or Filter:
-  - read_logs/read_metrics/read_traces("<path>/file.csv") → returns full file contents
-  - exec_shell("grep <pattern> <path>/file.csv") → filtered results only
+def build_telemetry_guide(namespace: str, enabled_types=None) -> str:
+    """Build the telemetry access guide based on which types are enabled.
 
-Submit your root cause analysis as a JSON dict. Each root cause should be
-a numbered key ("1", "2", ...) with the relevant fields:
-- "root cause occurrence datetime": "YYYY-MM-DD HH:MM:SS"
-- "root cause component": "component_name"
-- "root cause reason": "fault_reason"
-Include only the fields requested in the task above."""
+    Args:
+        namespace: AIOpsLab namespace string for example commands.
+        enabled_types: frozenset of enabled type strings ("log", "metric", "trace"),
+                       or None to include all three.
+    """
+    all_types = enabled_types is None
+
+    fetch_parts, read_parts, examples = [], [], []
+
+    if all_types or "log" in enabled_types:
+        fetch_parts.append("get_logs")
+        read_parts.append("read_logs")
+        examples.append(f'get_logs("{namespace}") or get_logs("{namespace}", "<service>")')
+    if all_types or "metric" in enabled_types:
+        fetch_parts.append("get_metrics")
+        read_parts.append("read_metrics")
+        examples.append(f'get_metrics("{namespace}")')
+    if all_types or "trace" in enabled_types:
+        fetch_parts.append("get_traces")
+        read_parts.append("read_traces")
+        examples.append(f'get_traces("{namespace}")')
+
+    fetch_cmds = "/".join(fetch_parts) if fetch_parts else "(none)"
+    read_cmds = "/".join(read_parts) if read_parts else "(none)"
+    examples_str = "\n  e.g., ".join(examples)
+
+    lines = [
+        "How to access telemetry data:",
+        f"Step 1 - Fetch: Use {fetch_cmds} to save data locally.",
+    ]
+    if examples_str:
+        lines.append(f"  e.g., {examples_str}")
+    lines += [
+        "Step 2 - Read or Filter:",
+        f'  - {read_cmds}("<path>/file.csv") → returns full file contents',
+        '  - exec_shell("grep <pattern> <path>/file.csv") → filtered results only',
+        "",
+        "Submit your root cause analysis as a JSON dict. Each root cause should be",
+        'a numbered key ("1", "2", ...) with the relevant fields:',
+        '- "root cause occurrence datetime": "YYYY-MM-DD HH:MM:SS"',
+        '- "root cause component": "component_name"',
+        '- "root cause reason": "fault_reason"',
+        "Include only the fields requested in the task above.",
+    ]
+    return "\n".join(lines)
 
 
 class OpenRCATask(Task):
@@ -59,10 +93,9 @@ class OpenRCATask(Task):
         # Actions are set by the problem class that inherits this
         self.actions = None
 
-        # Agent-specific telemetry guide (default: ReAct style)
-        self.telemetry_guide = DEFAULT_TELEMETRY_GUIDE.format(
-            namespace=app.namespace
-        )
+        # Telemetry guide: built dynamically by default; can be overridden by agents
+        self._telemetry_guide: str | None = None  # None → build dynamically
+        self._guide_overridden = False
 
         services_str = ", ".join(self.services) if self.services else "unknown"
 
@@ -92,13 +125,29 @@ class OpenRCATask(Task):
             Provide one API call per response.
             """
 
+    @property
+    def telemetry_guide(self) -> str:
+        return self._telemetry_guide or build_telemetry_guide(self.app.namespace)
+
+    @telemetry_guide.setter
+    def telemetry_guide(self, value: str):
+        self._telemetry_guide = value
+        self._guide_overridden = True
+
     def get_task_description(self):
+        # Build dynamically from enabled types unless an agent has set a custom guide
+        if self._guide_overridden:
+            guide = self._telemetry_guide
+        else:
+            enabled_types = getattr(self.actions, "enabled_telemetry_types", None)
+            guide = build_telemetry_guide(self.app.namespace, enabled_types)
+
         return textwrap.dedent(self.task_desc).format(
             app_summary=self.app_summary,
             services=self._services_str,
             instruction=self.instruction,
             namespace=self.app.namespace,
-            telemetry_guide=self.telemetry_guide,
+            telemetry_guide=guide,
         )
 
     def get_instructions(self):
@@ -107,13 +156,19 @@ class OpenRCATask(Task):
     def get_available_actions(self):
         if self.actions is None:
             return {}
+        enabled_types = getattr(self.actions, "enabled_telemetry_types", None)
         result = {}
         for method in dir(self.actions):
             fn = getattr(self.actions, method)
-            if callable(fn) and getattr(fn, "is_action", False):
-                sig = inspect.signature(fn)
-                doc = (fn.__doc__ or "").strip()
-                result[method] = f"{sig}\n{doc}"
+            if not (callable(fn) and getattr(fn, "is_action", False)):
+                continue
+            telemetry_type = getattr(fn, "telemetry_type", None)
+            if (enabled_types is not None and telemetry_type is not None
+                    and telemetry_type not in enabled_types):
+                continue
+            sig = inspect.signature(fn)
+            doc = (fn.__doc__ or "").strip()
+            result[method] = f"{sig}\n{doc}"
         return result
 
     def perform_action(self, action_name, *args, **kwargs):

@@ -1,7 +1,7 @@
-"""Executor: generates and runs Python code in IPython kernel.
+"""Executor: generates and runs Python code in an IPython kernel.
 
-Adapted from OpenRCA executor.py.
-Key difference: uses `telemetry` helper (pre-injected in kernel) instead of direct file paths.
+Key difference from the original OpenRCA executor: uses the pre-injected
+`telemetry` helper object instead of direct file paths.
 """
 
 import re
@@ -11,8 +11,8 @@ from datetime import datetime
 
 import tiktoken
 
-from clients.openrca_rca.api_router import get_chat_completion
-from clients.openrca_rca.prompts.executor_prompt import (
+from aiopslab.orchestrator.static_actions.executor.api_router import get_chat_completion
+from aiopslab.orchestrator.static_actions.executor.prompts.executor_prompt import (
     rule,
     system_template,
     code_format,

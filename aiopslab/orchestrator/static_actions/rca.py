@@ -4,19 +4,35 @@ All 7 task types use the same submit format (JSON dict).
 """
 
 from aiopslab.orchestrator.static_actions.base import StaticTaskActions
-from aiopslab.utils.actions import action
+from aiopslab.utils.actions import action, executor_action
 from aiopslab.utils.status import SubmissionStatus
 
 
 class StaticRCAActions(StaticTaskActions):
     """Actions for OpenRCA root cause analysis tasks."""
 
-    def __init__(self, *args, possible_root_causes=None, **kwargs):
+    def __init__(self, *args, possible_root_causes=None, telemetry_flags=None,
+                 use_executor=True, **kwargs):
         super().__init__(*args, **kwargs)
         self._executor_fn = None
         prc = possible_root_causes or {}
         self.possible_components = prc.get("components", [])
         self.possible_reasons = prc.get("reasons", [])
+
+        flags = telemetry_flags or {}
+        enabled = set()
+        if flags.get("enable_log", True):
+            enabled.add("log")
+        if flags.get("enable_metric", True):
+            enabled.add("metric")
+        if flags.get("enable_trace", True):
+            enabled.add("trace")
+        if use_executor:
+            enabled.add("executor")
+        # None means no filtering (backward compat when no flags provided)
+        self.enabled_telemetry_types: frozenset | None = (
+            frozenset(enabled) if telemetry_flags is not None else None
+        )
 
     def set_executor(self, executor_fn):
         """Inject an executor callback from the RCA agent.
@@ -26,7 +42,7 @@ class StaticRCAActions(StaticTaskActions):
         """
         self._executor_fn = executor_fn
 
-    @action
+    @executor_action
     def execute(self, instruction: str) -> str:
         """Runs Python code in an IPython kernel. Use for pandas data analysis on fetched CSVs."""
         if self._executor_fn is None:
