@@ -124,7 +124,7 @@ _TRACE_SCHEMA = """\
 
     ```csv
     timestamp,cmdb_id,span_id,trace_id,duration,type,status_code,operation_name,parent_span
-    1647705600361,frontend-0,a652d4d10e9478fc,9451fd8fdf746a80687451dae4c4e984,49877,rpc,0,hipstershop.CheckoutService/PlaceOrder,952754a738a11675
+    1647705600.361,frontend-0,a652d4d10e9478fc,9451fd8fdf746a80687451dae4c4e984,49877,rpc,0,hipstershop.CheckoutService/PlaceOrder,952754a738a11675
     ```"""
 
 _LOG_SCHEMA = """\
@@ -243,13 +243,14 @@ def build_schema(condition="all"):
     if enable_metric:
         timestamps.append("- Metric: Timestamp units are in seconds (e.g., 1647781200).")
     if enable_trace:
-        timestamps.append("- Trace: Timestamp units are in milliseconds (e.g., 1647705600361).")
+        timestamps.append("- Trace: Timestamp units are in seconds (e.g., 1647705600.361).")
     if enable_log:
         timestamps.append("- Log: Timestamp units are in seconds (e.g., 1647705660).")
     if timestamps:
         cl.append(
-            f"\n\n{cn}. In different telemetry files, the timestamp units and cmdb_id "
-            f"formats may vary:\n\n" + "\n".join(timestamps))
+            f"\n\n{cn}. All telemetry timestamps are in **seconds** (Unix epoch). "
+            f"Use `pd.to_datetime(ts, unit='s')` for conversion:\n\n"
+            + "\n".join(timestamps))
         cn += 1
 
     cl.append(

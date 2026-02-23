@@ -61,6 +61,7 @@ def execute_act(instruction, background, history, kernel, configs, logger):
 
     # Up to 2 attempts (initial + 1 retry on error)
     retry_flag = False
+    _failure_reason = None  # DEBUG: track why executor fails
     for attempt in range(2):
         try:
             if not retry_flag:
@@ -74,9 +75,11 @@ def execute_act(instruction, background, history, kernel, configs, logger):
             code = match.group(1).strip() if match else response.strip()
 
             logger.debug(f"Raw Code:\n{code}")
+            logger.info(f"[EXECUTOR DEBUG] attempt={attempt}, code_len={len(code)}")
 
             # Block visualization libraries
             if "import matplotlib" in code or "import seaborn" in code:
+                _failure_reason = "matplotlib/seaborn_blocked"
                 logger.warning("Visualization code detected, requesting rewrite.")
                 prompt.append({"role": "assistant", "content": code})
                 prompt.append({"role": "user", "content": (
@@ -95,6 +98,7 @@ def execute_act(instruction, background, history, kernel, configs, logger):
                 # Check token length
                 tokens_len = len(tokenizer.encode(result))
                 if tokens_len > 16384:
+                    _failure_reason = f"token_overflow({tokens_len})"
                     logger.warning(f"Token length exceeds limit: {tokens_len}")
                     continue
 
@@ -130,6 +134,7 @@ def execute_act(instruction, background, history, kernel, configs, logger):
                     exec_result.error_in_exec,
                     exec_result.error_in_exec.__traceback__,
                 ))
+                _failure_reason = f"exec_error: {err_msg[:200]}"
                 t2 = datetime.now()
                 logger.warning(f"Execution failed. Error: {err_msg}")
                 logger.debug(f"Time cost: {t2 - t1}")
@@ -141,11 +146,12 @@ def execute_act(instruction, background, history, kernel, configs, logger):
                 retry_flag = True
 
         except Exception as e:
-            logger.error(e)
+            _failure_reason = f"exception: {type(e).__name__}: {str(e)[:200]}"
+            logger.error(f"[EXECUTOR DEBUG] attempt={attempt}, exception: {e}")
             time.sleep(1)
 
     t2 = datetime.now()
-    logger.error(f"Max retries reached. Time cost: {t2 - t1}")
+    logger.error(f"Max retries reached. Failure reason: {_failure_reason}. Time cost: {t2 - t1}")
     err = "The Executor failed to complete the instruction, please re-write a new instruction for Executor."
     history.append({"role": "assistant", "content": err})
     return err, err, True, history

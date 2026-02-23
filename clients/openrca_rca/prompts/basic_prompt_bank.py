@@ -50,7 +50,7 @@ _TRACE_SCHEMA = """\
 
     ```csv
     timestamp,cmdb_id,parent_id,span_id,trace_id,duration
-    1614787199628,dockerA2,369-bcou-dle-way1-c514cf30-43410@0824-2f0e47a816-17492,21030300016145905763,gw0120210304000517192504,19
+    1614787199.628,dockerA2,369-bcou-dle-way1-c514cf30-43410@0824-2f0e47a816-17492,21030300016145905763,gw0120210304000517192504,19
     ```"""
 
 _LOG_SCHEMA = """\
@@ -129,12 +129,13 @@ def build_schema(condition="all"):
     if enable_metric:
         timestamps.append("- Metric: Timestamp units are in seconds (e.g., 1614787440).")
     if enable_trace:
-        timestamps.append("- Trace: Timestamp units are in milliseconds (e.g., 1614787199628).")
+        timestamps.append("- Trace: Timestamp units are in seconds (e.g., 1614787199.628).")
     if enable_log:
         timestamps.append("- Log: Timestamp units are in seconds (e.g., 1614787201).")
     if timestamps:
         cl.append(
-            f"\n\n{cn}. In different telemetry files, the timestamp units may vary:\n\n"
+            f"\n\n{cn}. All telemetry timestamps are in **seconds** (Unix epoch). "
+            f"Use `pd.to_datetime(ts, unit='s')` for conversion:\n\n"
             + "\n".join(timestamps))
         cn += 1
 

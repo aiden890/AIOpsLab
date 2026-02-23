@@ -70,31 +70,31 @@ _METRIC_SCHEMA = """\
     - App metrics:
         ```csv
         serviceName,startTime,avg_time,num,succee_num,succee_rate
-        osb_001,1586534400000,0.333,1,1,1.0
+        osb_001,1586534400.0,0.333,1,1,1.0
         ```
 
     - Container metrics:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
-        999999996381330,container_mem_used,ZJ-004-060,1586534423000,59.000000,docker_008
+        999999996381330,container_mem_used,ZJ-004-060,1586534423.0,59.000000,docker_008
         ```
 
     - Middleware metrics:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
-        999999996508323,connected_clients,ZJ-005-024,1586534672000,25,redis_003
+        999999996508323,connected_clients,ZJ-005-024,1586534672.0,25,redis_003
         ```
 
     - Node metrics:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
-        999999996487783,CPU_iowait_time,ZJ-001-010,1586534683000,0.022954,os_017
+        999999996487783,CPU_iowait_time,ZJ-001-010,1586534683.0,0.022954,os_017
         ```
 
     - Service metrics:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
-        999999998650974,MEM_Total,ZJ-002-055,1586534694000,381.902264,db_003
+        999999998650974,MEM_Total,ZJ-002-055,1586534694.0,381.902264,db_003
         ```"""
 
 _TRACE_SCHEMA = """\
@@ -102,7 +102,7 @@ _TRACE_SCHEMA = """\
 
     ```csv
     callType,startTime,elapsedTime,success,traceId,id,pid,cmdb_id,dsName,serviceName
-    JDBC,1586534400335,2.0,True,01df517164d1c0365586,407d617164d1c14f2613,6e02217164d1c14b2607,docker_006,db_003,
+    JDBC,1586534400.335,2.0,True,01df517164d1c0365586,407d617164d1c14f2613,6e02217164d1c14b2607,docker_006,db_003,
     ```"""
 
 
@@ -168,13 +168,14 @@ def build_schema(condition="all"):
 
     timestamps = []
     if enable_metric:
-        timestamps.append("- Metric: Timestamp units are in milliseconds (e.g., 1586534423000).")
+        timestamps.append("- Metric: Timestamp units are in seconds (e.g., 1586534423.0).")
     if enable_trace:
-        timestamps.append("- Trace: Timestamp units are in milliseconds (e.g., 1586534400335).")
+        timestamps.append("- Trace: Timestamp units are in seconds (e.g., 1586534400.335).")
     if timestamps:
         cl.append(
-            f"\n\n{cn}. In all telemetry files, the timestamp units and cmdb_id formats "
-            f"remain consistent:\n\n" + "\n".join(timestamps))
+            f"\n\n{cn}. All telemetry timestamps are in **seconds** (Unix epoch). "
+            f"Use `pd.to_datetime(ts, unit='s')` for conversion:\n\n"
+            + "\n".join(timestamps))
         cn += 1
 
     cl.append(
