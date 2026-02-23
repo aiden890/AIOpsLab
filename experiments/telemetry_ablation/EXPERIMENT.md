@@ -82,11 +82,11 @@ the correct container.
 
 ### Datasets and available telemetry
 
-| Short name | Config file(s) | Dataset key(s) | ~Problems | Available telemetry |
-|------------|---------------|----------------|-----------|---------------------|
-| bank | `openrca_bank.json` | `openrca_bank` | ~120 | log + metric + trace |
-| telecom | `openrca_telecom.json` | `openrca_telecom` | ~29 | **metric + trace only** (NO logs) |
-| market | `openrca_market_cloudbed1.json`, `openrca_market_cloudbed2.json` | `openrca_market_cb1`, `openrca_market_cb2` | ~180 | log + metric + trace |
+| Short name | Config file(s) | Dataset key(s) | Problems | Available telemetry |
+|------------|---------------|----------------|----------|---------------------|
+| bank | `openrca_bank.json` | `openrca_bank` | 398 | log + metric + trace |
+| telecom | `openrca_telecom.json` | `openrca_telecom` | 138 | **metric + trace only** (NO logs) |
+| market | `openrca_market_cloudbed1.json`, `openrca_market_cloudbed2.json` | `openrca_market_cb1`, `openrca_market_cb2` | 484 (234+250) | log + metric + trace |
 
 Config directory: `aiopslab/service/apps/static_dataset/config/`
 
@@ -110,7 +110,16 @@ and is automatically skipped.
 | telecom | run | **SKIP** (= all) | run | run |
 | market | run | run | run | run |
 
-**Total: 11 effective experiments** (~330 problems × 3.3 conditions avg ≈ ~1,100 runs)
+**Total: 11 effective experiments** (1,020 problems × 3.3 conditions avg ≈ 3,942 runs)
+
+### Execution groups (메모리 부담 분산)
+
+11개를 한번에 돌리면 메모리가 부족할 수 있어 두 그룹으로 분리:
+
+| Group | 실험 | 프로세스 | 총 tasks | 파일 |
+|-------|------|---------|---------|------|
+| **Group 1** | Bank(4) + Telecom(3) | 7 | 2,006 | [EXPERIMENT_GROUP1.md](EXPERIMENT_GROUP1.md) |
+| **Group 2** | Market CB1(4) + CB2(4) | 4+4 (2 phase) | 1,936 | [EXPERIMENT_GROUP2.md](EXPERIMENT_GROUP2.md) |
 
 ## Running experiments
 
@@ -426,7 +435,7 @@ cat experiments/telemetry_ablation/results/RESULTS.md
 
 | 항목 | 값 |
 |------|-----|
-| 총 문제 수 | ~1,100 (330 problems x 3.3 avg conditions) |
+| 총 문제 수 | ~3,942 (1,020 problems x ~3.9 avg conditions) |
 | 문제당 소요 시간 | ~40-60초 |
 | 병렬 프로세스 | Phase 1: 11, Phase 2: 4 |
 | 예상 총 시간 | Phase 1: ~2시간, Phase 2: ~30분 |

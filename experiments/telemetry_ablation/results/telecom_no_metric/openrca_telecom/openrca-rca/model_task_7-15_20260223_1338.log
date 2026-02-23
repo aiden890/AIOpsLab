@@ -1,0 +1,364 @@
+Session log started at 2026-02-23 13:38:18
+
+
+============================================================
+Step 1
+============================================================
+🤖 Agent Response:
+   ```
+execute("Load the traces data from telemetry and analyze the columns and sample data to understand the available fields and their values. This will help to understand the structure of the trace data and identify relevant fields for further analysis.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "The traces data contains the following columns: callType, startTime, elapsedTime, success, "
+    "traceId, id, pid, cmdb_id, dsName, and serviceName. The sample data shows that each trace record "
+    "includes the type of call (e.g., JDBC), the start time as a Unix timestamp, the elapsed time in seconds, "
+    "a success flag, unique identifiers for the trace and spans, the component ID (cmdb_id) indicating the node or pod, "
+    "the data source name (dsName), and the service name which is mostly empty in the sample. This structure provides "
+    "detailed information about each trace event, including timing, success status, and the involved components."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+(Index(['callType', 'startTime', 'elapsedTime', 'success', 'traceId', 'id', 'pid', 'cmdb_id', 'dsName', 'serviceName'], dtype='str'),   callType     startTime  elapsedTime  success               traceId                    id                   pid     cmdb_id  dsName  serviceName
+0     JDBC  1.590178e+09          3.0     True  48171c85d26468352a39  48171581b09333da2a39  48171faf0b6333da2a39  docker_008  db_003          NaN
+1     JDBC  1.590178e+09          2.0     True  48171c85d26468352a39  481712785024331b2a39  48171faf0b6333da2a39  docker_008  db_003          NaN
+2     JDBC  1.590178e+09          3.0     True  48171c85d26468352a39  481716bddd15332c2a39  48171c23eb84332c2a39  docker_008  db_003          NaN
+3     JDBC  1.590178e+09          2.0     True  48171c85d26468352a39  481716434e45337c2a39  48171c23eb84332c2a39  docker_008  db_003          NaN
+4     JDBC  1.590178e+09          1.0     True  48171c85d26468352a39  48171bc5269533dc2a39  48171278ee6533bc2a39  docker_008  db_003          NaN
+5     JDBC  1.590178e+09          3.0     True  48171c85d26468352a39  48171ed9e51972cd2a39  4817190d288872cd2a39  docker_007  db_003          NaN
+6     JDBC  1.590178e+09          3.0     Tru...
+   [Response truncated - 2539 total chars]
+------------------------------------------------------------
+
+
+============================================================
+Step 2
+============================================================
+🤖 Agent Response:
+   ```
+execute("Filter the traces data to include only records within the failure time range (May 23, 2020, 04:30 to 05:00, UTC+8). Then, aggregate the traces by component (cmdb_id) and calculate statistics such as the count of traces, average elapsedTime, and success rate for each component. This will help identify components with abnormal behavior during the failure period.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "During the failure time range from May 23, 2020, 04:30 to 05:00 (UTC+8), all traces across the components "
+    "docker_001 to docker_008 had a 100% success rate, indicating no failed traces. However, the average elapsed time "
+    "varied significantly among components. Notably, docker_006 had a much higher average elapsed time of about 7.69 seconds, "
+    "compared to other components which ranged between approximately 2.57 and 3.51 seconds. This suggests that docker_006 "
+    "experienced abnormal latency during the failure period, while other components operated normally."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+cmdb_id  trace_count  avg_elapsedTime  success_rate
+0  docker_001        56958         3.153762           1.0
+1  docker_002        58575         3.507384           1.0
+2  docker_003        55963         2.753015           1.0
+3  docker_004        59581         2.759907           1.0
+4  docker_005        35589         2.619742           1.0
+5  docker_006        36583         7.690157           1.0
+6  docker_007        36130         2.662275           1.0
+7  docker_008        35990         2.574910           1.0
+------------------------------------------------------------
+
+
+============================================================
+Step 3
+============================================================
+🤖 Agent Response:
+   ```
+execute("Extract the full elapsedTime series of traces for docker_006 from the entire available trace data (not limited to the failure time range). Calculate the global P95 threshold of elapsedTime for docker_006. Then, filter the traces of docker_006 within the failure time range and identify any consecutive trace records where elapsedTime exceeds the global P95 threshold, indicating potential faults.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    f"The global 95th percentile (P95) threshold of elapsedTime for docker_006 is {p95_threshold} seconds. "
+    "Within the failure time range, there are multiple consecutive trace records where the elapsedTime exceeds this threshold, "
+    "indicating potential faults. Specifically, 1807 such consecutive fault records were identified, with elapsed times "
+    "significantly above the P95 threshold, including values as high as 85 seconds. This confirms that docker_006 experienced "
+    "prolonged latency issues during the failure period."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+(np.float64(4.0),                              startTime_dt  elapsedTime  exceeds_p95  consecutive_fault
+5093  2020-05-23 04:34:05.578999996+08:00          5.0         True               True
+5094  2020-05-23 04:34:05.582999945+08:00          5.0         True               True
+5095  2020-05-23 04:34:05.585000038+08:00          5.0         True               True
+5242  2020-05-23 04:34:08.776000023+08:00          9.0         True               True
+5243  2020-05-23 04:34:08.789000034+08:00         10.0         True               True
+...                                   ...          ...          ...                ...
+25733 2020-05-23 04:52:17.456000090+08:00         85.0         True               True
+27615 2020-05-23 04:53:22.917000055+08:00         75.0         True               True
+29052 2020-05-23 04:54:23.795000076+08:00         17.0         True               True
+29517 2020-05-23 04:54:36.115000010+08:00          9.0         True               True
+36120 2020-05-23 04:59:21.983000040+08:00         24.0         True               True
+
+[1807 rows x 4 columns])
+
+**Note**: The printed pandas DataFrame is truncated. Only **10 rows** are displayed. Use `df.head(X)` to display more rows.
+------------------------------------------------------------
+
+
+============================================================
+Step 4
+============================================================
+🤖 Agent Response:
+   ```
+execute("Analyze the traces involving docker_006 within the failure time range to identify the call types, success rates, and downstream components. Specifically, extract the distribution of callType and success flags for docker_006 traces, and identify if there are any failed calls or unusual call patterns that could indicate the root cause reason.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "Within the failure time range, all traces involving docker_006 have the call type 'JDBC' and a 100% success rate, "
+    "indicating no failed calls. The downstream components (identified by 'pid') are numerous and diverse, with many unique "
+    "pids involved, but no unusual call patterns or failures are observed. This suggests that while docker_006 experienced "
+    "high latency, the calls themselves were successful and the root cause may not be related to call failures or specific "
+    "downstream component issues."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+(  callType  success  count
+0     JDBC     True  36583,                         pid  count
+0      48171e8d0c85526a9ceb      3
+1      48171153c3846754f6fb      3
+2      48171ebe9d3388b522fa      2
+3      48171be6a97488f622fa      2
+4      48171d496445885722fa      2
+...                     ...    ...
+21934  481716ca6089930f92ac      1
+21935  481718ba214404dca2ac      1
+21936  48171604b916047da2ac      1
+21937  481710503b8704bea2ac      1
+21938  48171ff8bd501412b2ac      1
+
+[21939 rows x 2 columns])
+
+**Note**: The printed pandas DataFrame is truncated. Only **10 rows** are displayed. Use `df.head(X)` to display more rows.
+------------------------------------------------------------
+
+
+============================================================
+Step 5
+============================================================
+🤖 Agent Response:
+   ```
+execute("Extract and analyze logs related to docker_006 within the failure time range (May 23, 2020, 04:30 to 05:00, UTC+8). Summarize the log levels, message patterns, and any recurring error or warning messages that could indicate resource faults such as CPU fault, network delay, network loss, database connection limit, or database close.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "No logs related to docker_006 within the failure time range (May 23, 2020, 04:30 to 05:00, UTC+8) were found in the available telemetry data. "
+    "Therefore, no information on log levels, message patterns, or recurring error or warning messages is available to indicate resource faults such as CPU fault, "
+    "network delay, network loss, database connection limit, or database close for docker_006 during this period."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+(Empty DataFrame
+Columns: []
+Index: [], Empty DataFrame
+Columns: []
+Index: [])
+------------------------------------------------------------
+
+
+============================================================
+Step 6
+============================================================
+🤖 Agent Response:
+   ```
+submit({
+    "1": {
+        "root cause occurrence datetime": "2020-05-23 04:34:05",
+        "root cause component": "docker_006",
+        "root cause reason": "network delay"
+    }
+})
+```
+
+📋 Observation:
+   SubmissionStatus.VALID_SUBMISSION
+------------------------------------------------------------
+
+
+============================================================
+📊 Results:
+============================================================
+{'score': 0.33, 'passing_criteria': ['docker_006'], 'failing_criteria': ['2020-05-23 04:47:00', 'CPU fault'], 'task_type': 'task_7', 'difficulty': 'hard', 'TTA': 105.25159502029419, 'success': False, 'steps': 6, 'in_tokens': 2330, 'out_tokens': 415}
+
+Session log ended at 2026-02-23 13:40:14
+er the traces of docker_006 within the failure time range and identify any consecutive trace records where elapsedTime exceeds the global P95 threshold, indicating potential faults.
+Completed: False
+--------------------------------------------------------------------------------
+2026-02-23 13:38:55,483 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:38:55,483 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:39:00,477 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:00,477 [openrca_rca] INFO: [EXECUTOR DEBUG] attempt=0, code_len=1256
+2026-02-23 13:39:00,592 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:00,593 [openai._base_client] INFO: Retrying request to /chat/completions in 2.000000 seconds
+2026-02-23 13:39:03,961 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:03,962 [openrca_rca] INFO: --------------------------------------------------------------------------------
+Step[3] Observation:
+```python
+summary = (
+    f"The global 95th percentile (P95) threshold of elapsedTime for docker_006 is {p95_threshold} seconds. "
+    "Within the failure time range, there are multiple consecutive trace records where the elapsedTime exceeds this threshold, "
+    "indicating potential faults. Specifically, 1807 such consecutive fault records were identified, with elapsed times "
+    "significantly above the P95 threshold, including values as high as 85 seconds. This confirms that docker_006 experienced "
+    "prolonged latency issues during the failure period."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+(np.float64(4.0),                              startTime_dt  elapsedTime  exceeds_p95  consecutive_fault
+5093  2020-05-23 04:34:05.578999996+08:00          5.0         True               True
+5094  2020-05-23 04:34:05.582999945+08:00          5.0         True               True
+5095  2020-05-23 04:34:05.585000038+08:00          5.0         True               True
+5242  2020-05-23 04:34:08.776000023+08:00          9.0         True               True
+5243  2020-05-23 04:34:08.789000034+08:00         10.0         True               True
+...                                   ...          ...          ...                ...
+25733 2020-05-23 04:52:17.456000090+08:00         85.0         True               True
+27615 2020-05-23 04:53:22.917000055+08:00         75.0         True               True
+29052 2020-05-23 04:54:23.795000076+08:00         17.0         True               True
+29517 2020-05-23 04:54:36.115000010+08:00          9.0         True               True
+36120 2020-05-23 04:59:21.983000040+08:00         24.0         True               True
+
+[1807 rows x 4 columns])
+
+**Note**: The printed pandas DataFrame is truncated. Only **10 rows** are displayed. Use `df.head(X)` to display more rows.
+--------------------------------------------------------------------------------
+2026-02-23 13:39:04,036 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:04,036 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:39:05,049 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:05,051 [openai._base_client] INFO: Retrying request to /chat/completions in 2.000000 seconds
+2026-02-23 13:39:07,064 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:07,064 [openrca_rca] WARNING: Rate limited (attempt 1), retrying in 1s
+2026-02-23 13:39:08,136 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:08,136 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:39:09,145 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:09,145 [openai._base_client] INFO: Retrying request to /chat/completions in 3.000000 seconds
+2026-02-23 13:39:12,155 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:12,155 [openrca_rca] WARNING: Rate limited (attempt 2), retrying in 2s
+2026-02-23 13:39:14,222 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:14,223 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:39:15,253 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:15,254 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:39:16,264 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:16,264 [openrca_rca] WARNING: Rate limited (attempt 3), retrying in 4s
+2026-02-23 13:39:20,342 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:20,343 [openai._base_client] INFO: Retrying request to /chat/completions in 2.000000 seconds
+2026-02-23 13:39:24,528 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:24,528 [openrca_rca] INFO: --------------------------------------------------------------------------------
+### Controller Step[4]
+Analysis: The global P95 threshold for elapsedTime of docker_006 was calculated as 4.0 seconds. Within the failure time range, there are many consecutive trace records where elapsedTime exceeds this threshold, with values reaching as high as 85 seconds. This indicates a significant and prolonged latency fault in docker_006 during the failure period. The fault is well-defined as a consecutive sub-series of anomalous high latency, which strongly suggests docker_006 as a faulty component. Since no other components showed such anomalies, docker_006 is the primary candidate for the root cause component. The next step is to analyze the traces involving docker_006 to identify the root cause reason, such as network delay, CPU fault, or database connection issues, by examining call types, success rates, and downstream components in the traces.
+Instruction: Analyze the traces involving docker_006 within the failure time range to identify the call types, success rates, and downstream components. Specifically, extract the distribution of callType and success flags for docker_006 traces, and identify if there are any failed calls or unusual call patterns that could indicate the root cause reason.
+Completed: False
+--------------------------------------------------------------------------------
+2026-02-23 13:39:24,602 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:24,602 [openai._base_client] INFO: Retrying request to /chat/completions in 3.000000 seconds
+2026-02-23 13:39:29,096 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:29,096 [openrca_rca] INFO: [EXECUTOR DEBUG] attempt=0, code_len=487
+2026-02-23 13:39:29,180 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:29,180 [openai._base_client] INFO: Retrying request to /chat/completions in 3.000000 seconds
+2026-02-23 13:39:33,929 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:33,929 [openrca_rca] INFO: --------------------------------------------------------------------------------
+Step[4] Observation:
+```python
+summary = (
+    "Within the failure time range, all traces involving docker_006 have the call type 'JDBC' and a 100% success rate, "
+    "indicating no failed calls. The downstream components (identified by 'pid') are numerous and diverse, with many unique "
+    "pids involved, but no unusual call patterns or failures are observed. This suggests that while docker_006 experienced "
+    "high latency, the calls themselves were successful and the root cause may not be related to call failures or specific "
+    "downstream component issues."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+(  callType  success  count
+0     JDBC     True  36583,                         pid  count
+0      48171e8d0c85526a9ceb      3
+1      48171153c3846754f6fb      3
+2      48171ebe9d3388b522fa      2
+3      48171be6a97488f622fa      2
+4      48171d496445885722fa      2
+...                     ...    ...
+21934  481716ca6089930f92ac      1
+21935  481718ba214404dca2ac      1
+21936  48171604b916047da2ac      1
+21937  481710503b8704bea2ac      1
+21938  48171ff8bd501412b2ac      1
+
+[21939 rows x 2 columns])
+
+**Note**: The printed pandas DataFrame is truncated. Only **10 rows** are displayed. Use `df.head(X)` to display more rows.
+--------------------------------------------------------------------------------
+2026-02-23 13:39:34,008 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:34,009 [openai._base_client] INFO: Retrying request to /chat/completions in 4.000000 seconds
+2026-02-23 13:39:39,857 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:39,857 [openrca_rca] INFO: --------------------------------------------------------------------------------
+### Controller Step[5]
+Analysis: The analysis of traces involving docker_006 during the failure period shows that all calls were of type 'JDBC' and had a 100% success rate, indicating no call failures. The downstream components (pids) are numerous and diverse, with no unusual call patterns or failures observed. This suggests that the high latency issue in docker_006 is not caused by call failures or downstream component issues. Since metric data is not available, the next step is to analyze logs related to docker_006 within the failure time range to identify any resource issues or errors that could explain the latency problem and help determine the root cause reason.
+Instruction: Extract and analyze logs related to docker_006 within the failure time range (May 23, 2020, 04:30 to 05:00, UTC+8). Summarize the log levels, message patterns, and any recurring error or warning messages that could indicate resource faults such as CPU fault, network delay, network loss, database connection limit, or database close.
+Completed: False
+--------------------------------------------------------------------------------
+2026-02-23 13:39:45,588 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:45,588 [openrca_rca] INFO: [EXECUTOR DEBUG] attempt=0, code_len=3587
+2026-02-23 13:39:45,695 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:45,695 [openai._base_client] INFO: Retrying request to /chat/completions in 5.000000 seconds
+2026-02-23 13:39:50,756 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:50,756 [openai._base_client] INFO: Retrying request to /chat/completions in 3.000000 seconds
+2026-02-23 13:39:55,073 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:55,073 [openrca_rca] INFO: --------------------------------------------------------------------------------
+Step[5] Observation:
+```python
+summary = (
+    "No logs related to docker_006 within the failure time range (May 23, 2020, 04:30 to 05:00, UTC+8) were found in the available telemetry data. "
+    "Therefore, no information on log levels, message patterns, or recurring error or warning messages is available to indicate resource faults such as CPU fault, "
+    "network delay, network loss, database connection limit, or database close for docker_006 during this period."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+(Empty DataFrame
+Columns: []
+Index: [], Empty DataFrame
+Columns: []
+Index: [])
+--------------------------------------------------------------------------------
+2026-02-23 13:39:55,150 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:55,151 [openai._base_client] INFO: Retrying request to /chat/completions in 2.000000 seconds
+2026-02-23 13:39:59,064 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:39:59,065 [openrca_rca] INFO: --------------------------------------------------------------------------------
+### Controller Step[6]
+Analysis: The analysis has identified docker_006 as the faulty component during the failure period due to significantly elevated elapsed times in traces, despite all calls being successful and no logs available to provide further clues. The absence of logs limits the ability to pinpoint the exact root cause reason from logs. Given the available data, the root cause is likely related to resource issues causing latency in docker_006. Since no other components showed faults and docker_006's latency was significantly above the global threshold, docker_006 is the root cause component. The root cause reason is likely related to network delay or resource contention causing high latency, as no call failures or database connection issues were observed.
+Instruction: Submit the root cause occurrence datetime as the start time of the first detected fault in docker_006 (the earliest trace exceeding the global P95 threshold within the failure period), the root cause component as 'docker_006', and the root cause reason as 'network delay causing high latency'.
+Completed: True
+--------------------------------------------------------------------------------
+2026-02-23 13:39:59,138 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:39:59,139 [openai._base_client] INFO: Retrying request to /chat/completions in 4.000000 seconds
+2026-02-23 13:40:04,089 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
