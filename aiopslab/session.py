@@ -129,30 +129,32 @@ class Session:
 
         return summary
 
-    def get_filepath(self, file_type: str = "log"):
-        """Get the file path to save the session data."""
-        results_dir = self.results_dir if self.results_dir else RESULTS_DIR
+    def get_save_dir(self) -> Path:
+        """Get the directory where all session files are saved.
 
-        # Parse problem ID to extract dataset and task info
+        Structure: results_dir / dataset / agent / model / eval_id /
+        Created on first call.
+        """
+        results_dir = self.results_dir if self.results_dir else RESULTS_DIR
         agent = self.agent_name or "agent"
         pid = self.pid or "unknown"
-
-        # Extract dataset from pid
-        if '-' in pid:
-            dataset, task = pid.split('-', maxsplit=1)
-        else:
-            dataset, task = "unknown", "unknown"
-
-        # Create directory structure: dataset/agent/model/eval_id/
+        dataset = pid.split('-', maxsplit=1)[0] if '-' in pid else "unknown"
         model = self.model_name.replace("/", "-") if self.model_name else "unknown"
         eval_id = self.eval_id or "default"
         save_dir = results_dir / dataset / agent / model / eval_id
+        save_dir.mkdir(parents=True, exist_ok=True)
+        return save_dir
 
-        # Create filename: {timestamp}_{task}.log
+    def get_filepath(self, file_type: str = "log"):
+        """Get the file path to save the session data."""
+        pid = self.pid or "unknown"
+        task = pid.split('-', maxsplit=1)[1] if '-' in pid else "unknown"
+
+        # Create filename: {timestamp}_{task}.{file_type}
         timestamp = datetime.fromtimestamp(self.start_time).strftime("%Y%m%d_%H%M")
         filename = f"{timestamp}_{task}.{file_type}"
 
-        return save_dir / filename
+        return self.get_save_dir() / filename
 
     def to_json(self):
         """Save the session to a JSON file."""
