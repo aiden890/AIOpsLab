@@ -48,6 +48,46 @@ def write(method):
     return method
 
 
+def log_action(method):
+    """Mark a method as a log telemetry action."""
+    method.is_action = True
+    method.action_type = "read"
+    method.telemetry_type = "log"
+    return method
+
+
+def metric_action(method):
+    """Mark a method as a metric telemetry action."""
+    method.is_action = True
+    method.action_type = "read"
+    method.telemetry_type = "metric"
+    return method
+
+
+def trace_action(method):
+    """Mark a method as a trace telemetry action."""
+    method.is_action = True
+    method.action_type = "read"
+    method.telemetry_type = "trace"
+    return method
+
+
+def executor_action(method):
+    """Mark a method as an executor action (requires use_executor=True)."""
+    method.is_action = True
+    method.action_type = "action"
+    method.telemetry_type = "executor"
+    return method
+
+
+def hypothesis_action(method):
+    """Mark a method as a hypothesis action (requires use_hypothesis=True)."""
+    method.is_action = True
+    method.action_type = "action"
+    method.telemetry_type = "hypothesis"
+    return method
+
+
 def get_actions(task: str, subtype: str | None = None) -> dict:
     """
     Get all actions for the given task.
