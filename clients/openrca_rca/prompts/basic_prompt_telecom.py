@@ -62,8 +62,9 @@ cand = """## POSSIBLE ROOT CAUSE REASONS:
 
 schema = f"""## TELEMETRY DATA ACCESS:
 
-- Use `telemetry.get_logs()`, `telemetry.get_metrics()`, `telemetry.get_traces()` to fetch data.
-- Each returns a directory path. Read CSVs from there (e.g., `pd.read_csv(f"{{dir}}/metrics.csv")`).
+- Use `telemetry.get_metrics()`, `telemetry.get_traces()` to fetch data.
+- Each returns the **full file path** to a CSV. Read it directly:
+  `metric_path = telemetry.get_metrics(); df = pd.read_csv(metric_path)`
 
 ## DATA SCHEMA
 
@@ -112,11 +113,27 @@ schema = f"""## TELEMETRY DATA ACCESS:
 
 1. This service system is a telecom database system.
 
-2. The `metric_app` data only contains five KPIs: startTime, avg_time, num, succee_num, succee_rate. In contrast, other metrics record a variety of KPIs, such as CPU usage and memory usage. The specific names of these KPIs can be found in the `name` field.
+2. The metrics CSV contains merged data from **multiple metric files** (app, container, node, service, middleware) with different column structures. Non-applicable columns will be NaN. Always filter by `cmdb_id` to get per-component metrics, and by `name` to select the right KPI:
+   - App metrics: columns `serviceName, startTime, avg_time, num, succee_num, succee_rate`
+   - All other metrics: columns `itemid, name, bomc_id, timestamp, value, cmdb_id`
 
 3. In all telemetry files, the timestamp units and cmdb_id formats remain consistent:
 
-- Metric: Timestamp units are in milliseconds (e.g., 1586534423000).
-- Trace: Timestamp units are in milliseconds (e.g., 1586534400335).
+- Metric: Timestamp units are in **seconds** (e.g., 1586534423).
+- Metric (app): `startTime` is in **seconds**.
+- Trace: Timestamp units are in **seconds** (e.g., 1586534400).
 
-4. Please use the UTC+8 time zone in all analysis steps since system is deployed in China/Hong Kong/Singapore."""
+4. All issues use **UTC** time. However, the local machine's default timezone is unknown.
+
+"""
+
+guidance = """\
+## TELECOM-SPECIFIC RCA GUIDANCE:
+
+Since logs are unavailable, use metrics and traces to infer root cause reason:
+
+- **CPU fault**: High `cpu_used` (container metric) or high CPU-related KPIs (e.g., `CPU_iowait_time`, `CPU_user_time`) for the faulty component.
+- **network delay**: High `elapsedTime` in trace spans to/from the faulty component, or high network latency KPIs in node metrics.
+- **network loss**: High packet-drop KPIs (`net_if_in_drop`, `net_if_out_drop`) in node metrics, or sudden drops in `succee_rate` in app metrics.
+- **db connection limit**: High `connected_clients` in middleware metrics, or many failed trace calls (success=False) to a db service with no gap between calls.
+- **db close**: Sudden complete failure of all trace calls to a db service (all success=False) with a sharp drop to 0 in that service's metrics."""
