@@ -88,6 +88,24 @@ def hypothesis_action(method):
     return method
 
 
+def hypothesis_executor_action(method):
+    """Mark a method that requires BOTH hypothesis and executor to be enabled."""
+    method.is_action = True
+    method.action_type = "action"
+    method.telemetry_type = "hypothesis"
+    method.required_telemetry_types = frozenset({"hypothesis", "executor"})
+    return method
+
+
+def hypothesis_trace_action(method):
+    """Mark a method that requires BOTH hypothesis and trace to be enabled."""
+    method.is_action = True
+    method.action_type = "action"
+    method.telemetry_type = "hypothesis"
+    method.required_telemetry_types = frozenset({"hypothesis", "trace"})
+    return method
+
+
 def get_actions(task: str, subtype: str | None = None) -> dict:
     """
     Get all actions for the given task.

@@ -27,9 +27,14 @@ _NOTEBOOK_TEMPLATE = {
     "cells": [],
 }
 
-from aiopslab.orchestrator.static_actions.rca import StaticRCAActions
+from aiopslab.orchestrator.static_actions.rca import (
+    StaticRCAActions, _normalize_trace_schema, _compute_network_gap, _to_unix_ts,
+)
 from aiopslab.orchestrator.static_actions.executor.helper import TelemetryHelper
-from aiopslab.utils.actions import action, executor_action, hypothesis_action
+from aiopslab.utils.actions import (
+    action, executor_action, hypothesis_action,
+    hypothesis_executor_action, hypothesis_trace_action,
+)
 from aiopslab.orchestrator.static_actions.executor.api_router import load_config
 from aiopslab.orchestrator.static_actions.executor.runner import execute_act
 
@@ -53,6 +58,10 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         self._logger = logging.getLogger("rca_executor")
         self._namespace = ""
         self._hypotheses: list[dict] = []
+        self._relationships_analyzed: bool = False
+        self._causal_graph_called: bool = False
+        self._query_start: float | None = None
+        self._query_end: float | None = None
 
     def setup_executor(
         self,
@@ -61,6 +70,7 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         namespace: str,
         logger=None,
         notebook_save_path: str | None = None,
+        query_time_range: dict | None = None,
     ):
         """Initialize IPython kernel, TelemetryHelper, and LLM config.
 
@@ -77,6 +87,14 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         self._namespace = namespace
         self._executor_history = []  # persists across all execute() calls
         self._hypotheses = []  # reset each problem
+        self._relationships_analyzed = False
+        self._causal_graph_called = False
+        if query_time_range:
+            self._query_start = float(query_time_range.get("start", 0) or 0)
+            self._query_end = float(query_time_range.get("end", 0) or 0)
+        else:
+            self._query_start = None
+            self._query_end = None
         if logger is not None:
             self._logger = logger
 
@@ -126,6 +144,42 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
                     f"Use save_hypothesis() to record {needed} more candidate(s) "
                     f"before submitting. Investigate other component levels, "
                     f"trace call chains, or alternative reasons."
+                )
+
+            trace_mode = (
+                self.enabled_telemetry_types is not None
+                and "trace" in self.enabled_telemetry_types
+            )
+            if trace_mode and not self._causal_graph_called:
+                saved = "\n".join(
+                    f"  #{h['id']} [{h['confidence'].upper()}] "
+                    f"{h['component']} | {h['reason']} | {h['datetime']}"
+                    for h in self._hypotheses
+                )
+                return (
+                    f"Submission rejected: you must call get_hypothesis_causal_graph() "
+                    f"before submitting. This step shows the trace call chain and elapsed "
+                    f"times connecting all hypothesis components.\n\n"
+                    f"Current hypotheses ({len(self._hypotheses)} saved):\n{saved}\n\n"
+                    f"Call get_hypothesis_causal_graph(namespace, start_time, end_time) to proceed."
+                )
+
+            executor_mode = (
+                self.enabled_telemetry_types is not None
+                and "executor" in self.enabled_telemetry_types
+            )
+            if executor_mode and not self._relationships_analyzed:
+                saved = "\n".join(
+                    f"  #{h['id']} [{h['confidence'].upper()}] "
+                    f"{h['component']} | {h['reason']} | {h['datetime']}"
+                    for h in self._hypotheses
+                )
+                return (
+                    f"Submission rejected: you must call analyze_hypothesis_relationships() "
+                    f"before submitting. This step reasons about which hypothesis is the "
+                    f"root origin (not a downstream victim).\n\n"
+                    f"Current hypotheses ({len(self._hypotheses)} saved):\n{saved}\n\n"
+                    f"Call analyze_hypothesis_relationships(\"<your analysis instruction>\") to proceed."
                 )
 
             high_confidence = [h for h in self._hypotheses
@@ -242,6 +296,7 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
                       e.g. "metric: os_012 CPU_util breached P95 at 2020-05-22 16:48:23"
                            "trace: db_003 span error at startTime=2020-05-22 16:47:55"
         """
+        import re as _re
         unknown_markers = ("unknown", "unclear", "uncertain", "n/a", "none", "tbd", "")
         if reason.strip().lower() in unknown_markers or "unknown" in reason.lower():
             return (
@@ -256,11 +311,30 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         _round = _re.match(r"\d{4}-\d{2}-\d{2} \d{2}:(00|30):00$", datetime.strip())
         if _round:
             return (
-                f"Hypothesis rejected: datetime '{datetime}' looks like a round estimate, not a "
-                f"real telemetry timestamp. Use peak_high_ts from get_kpi_high_deviation() "
-                f"or peak_low_ts from get_kpi_low_deviation(), or read the timestamp column "
-                f"directly from the metric/trace CSV and resubmit."
+                f"Hypothesis rejected: datetime '{datetime}' looks like a round estimate "
+                f"(exact hour HH:00:00). Use the exact timestamp from telemetry: "
+                f"peak_high_ts from get_kpi_high_deviation() or "
+                f"peak_low_ts from get_kpi_low_deviation(). "
+                f"If the table output was truncated, use execute() to extract the exact value."
             )
+
+        # Validate datetime is within the query time range (if known)
+        if self._query_start and self._query_end:
+            import pandas as _pd2
+            try:
+                dt_ts = _pd2.Timestamp(datetime.strip()).timestamp()
+                if dt_ts < self._query_start or dt_ts > self._query_end:
+                    import datetime as _dt
+                    start_str = _dt.datetime.utcfromtimestamp(self._query_start).strftime("%Y-%m-%d %H:%M:%S")
+                    end_str = _dt.datetime.utcfromtimestamp(self._query_end).strftime("%Y-%m-%d %H:%M:%S")
+                    return (
+                        f"Hypothesis rejected: datetime '{datetime}' is outside the query "
+                        f"time range [{start_str} ~ {end_str} UTC]. "
+                        f"Use a timestamp from the fault window. "
+                        f"Check peak_high_ts / peak_low_ts from KPI deviation actions."
+                    )
+            except Exception:
+                pass  # unparseable datetime — let it through
 
         idx = len(self._hypotheses) + 1
         self._hypotheses.append({
@@ -299,6 +373,148 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
                 f"    Evidence: {h['evidence']}"
             )
         return "\n".join(lines)
+
+    @hypothesis_trace_action
+    def get_hypothesis_causal_graph(self, namespace: str,
+                                    start_time=None, end_time=None,
+                                    components: list = None) -> str:
+        """Build a causal trace graph focused on saved hypothesis components and extra components.
+
+        Pass extra `components` to includ additional candidates alongside saved hypotheses.
+        """
+        import pandas as _pd
+        if not self._hypotheses:
+            return (
+                "No hypotheses saved yet. Save candidates with save_hypothesis() first."
+            )
+
+        hyp_components = {h["component"] for h in self._hypotheses}
+        # Merge in any extra components the caller wants to focus on
+        if components:
+            hyp_components = hyp_components | set(components)
+        hyp_map = {h["component"]: h for h in self._hypotheses}
+
+        raw_df = self.static_app.fetch_traces_df(namespace)
+        if raw_df.empty:
+            return f"No trace data found for namespace '{namespace}'."
+
+        ts_col = "startTime" if "startTime" in raw_df.columns else "timestamp"
+        start_ts = _to_unix_ts(start_time)
+        end_ts = _to_unix_ts(end_time)
+        if start_ts is not None:
+            raw_df = raw_df[raw_df[ts_col] >= start_ts]
+        if end_ts is not None:
+            raw_df = raw_df[raw_df[ts_col] <= end_ts]
+
+        if raw_df.empty:
+            return "No traces found in the specified time window."
+
+        norm_df = _normalize_trace_schema(raw_df)
+        if norm_df.empty or "cmdb_id" not in norm_df.columns or "dsName" not in norm_df.columns:
+            return "Could not build call graph from trace data (schema unsupported)."
+
+        # Edge stats: (caller, callee) → call_count, avg_elapsed
+        edge_stats = (
+            norm_df.groupby(["cmdb_id", "dsName"])
+            .agg(call_count=("startTime", "count"), avg_elapsed=("elapsedTime", "mean"))
+            .reset_index()
+        )
+
+        # Network gap per component from raw spans
+        gap_info = _compute_network_gap(raw_df)
+
+        # Drop self-loops (intra-component spans — meaningless for call graph)
+        edge_stats = edge_stats[edge_stats["cmdb_id"] != edge_stats["dsName"]]
+
+        # Focus on edges where at least one endpoint is a hypothesis component
+        mask = (
+            edge_stats["cmdb_id"].isin(hyp_components)
+            | edge_stats["dsName"].isin(hyp_components)
+        )
+        focused = edge_stats[mask]
+        if focused.empty:
+            focused = edge_stats  # fallback: show all if no direct match
+
+        # Sort: hypothesis callees first (to show what's being called by others), then by elapsed
+        focused = focused.copy()
+        focused["_hyp_callee"] = focused["dsName"].isin(hyp_components).astype(int)
+        focused = focused.sort_values(["_hyp_callee", "avg_elapsed"], ascending=[False, False])
+
+        def _label(comp):
+            if comp in hyp_map:
+                h = hyp_map[comp]
+                return f"{comp} [HYP#{h['id']}: {h['reason']}]"
+            return comp
+
+
+        lines = [
+            f"Causal graph for '{namespace}':",
+            f"Components: {', '.join(sorted(hyp_components))}",
+            "",
+            "Call chain (caller → callee)  avg_elapsed  net_gap (caller):",
+        ]
+        for _, row in focused.iterrows():
+            caller, callee = row["cmdb_id"], row["dsName"]
+            count = int(row["call_count"])
+            elapsed = row["avg_elapsed"]
+            g = gap_info.get(caller, {})
+            gap_str = (
+                f"  net_gap={g['avg_gap_ms']:.0f}ms/{g['avg_parent_dur_ms']:.0f}ms"
+                f" ({g['gap_ratio']*100:.0f}%)"
+                if g else ""
+            )
+            lines.append(
+                f"  {_label(caller)}  →  {_label(callee)}"
+                f"    calls={count}  avg_elapsed={elapsed:.0f}ms{gap_str}"
+            )
+
+        if gap_info:
+            hyp_gaps = [(c, gap_info[c]) for c in sorted(hyp_components) if c in gap_info]
+            if hyp_gaps:
+                lines += ["", "Network gap per hypothesis component:"]
+                for comp, g in hyp_gaps:
+                    lines.append(
+                        f"  {comp}: avg_gap={g['avg_gap_ms']:.0f}ms"
+                        f" / avg_parent={g['avg_parent_dur_ms']:.0f}ms"
+                        f"  gap_ratio={g['gap_ratio']*100:.0f}%"
+                        f"  (n={g['span_count']} spans)"
+                    )
+
+        self._causal_graph_called = True
+        return "\n".join(lines)
+
+    @hypothesis_executor_action
+    def analyze_hypothesis_relationships(self, instruction: str) -> str:
+        """Analyze relationships between all saved hypotheses to identify the root origin.
+
+            instruction: Describe what relationship analysis to perform.
+        """
+        if not self._hypotheses:
+            return (
+                "No hypotheses saved yet. Use save_hypothesis() to record candidates "
+                "before analyzing relationships."
+            )
+
+        order = {"high": 0, "medium": 1, "low": 2}
+        ranked = sorted(self._hypotheses,
+                        key=lambda h: order.get(h["confidence"].lower(), 3))
+        hyp_lines = [f"Saved hypotheses ({len(ranked)} total):"]
+        for h in ranked:
+            hyp_lines.append(
+                f"  #{h['id']} [{h['confidence'].upper()}] "
+                f"{h['component']} | {h['reason']} | {h['datetime']}\n"
+                f"    Evidence: {h['evidence']}"
+            )
+        hyp_context = "\n".join(hyp_lines)
+
+        enriched_instruction = (
+            f"{hyp_context}\n\n"
+            f"Relationship analysis task:\n{instruction}"
+        )
+
+        result = self.execute(enriched_instruction)
+        self._relationships_analyzed = True
+        return result
 
     def cleanup(self):
         """Release IPython kernel resources."""
