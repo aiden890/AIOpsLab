@@ -235,23 +235,28 @@ class SessionPrint:
 
     def _parse_react_response(self, text):
         """Parse ReAct format response into thought and action components.
-        Returns empty strings if not in ReAct format."""
 
+        Handles two formats:
+          1. "Thought: ...\n```\naction()\n```"  (structured JSON agent)
+          2. "Thought: ...\nAction: ..."          (plain text ReAct agent)
+
+        Returns ("", "") if neither format is detected.
+        """
         thought = ""
         action = ""
 
-        # Check if text contains ReAct markers (case-insensitive)
-        if 'thought:' not in text.lower() and 'action:' not in text.lower():
-            return "", ""
-
-        # Extract thought section
-        thought_match = re.search(r'Thought:\s*(.*?)(?=\nAction:|$)', text, re.IGNORECASE | re.DOTALL)
+        # Extract thought (stops at code block or Action: marker)
+        thought_match = re.search(r'Thought:\s*(.*?)(?=\n```|\nAction:|$)', text, re.IGNORECASE | re.DOTALL)
         if thought_match:
             thought = thought_match.group(1).strip()
 
-        # Extract action section - only content within code blocks
-        action_match = re.search(r'Action:\s*(.*?)(?=$|\n(?:Thought|Action|Observation):)', text, re.IGNORECASE | re.DOTALL)
-        if action_match:
-            action = action_match.group(1).strip()
+        # Prefer code block as action; fall back to Action: marker
+        code_match = re.search(r'```[^\n]*\n(.*?)\n```', text, re.DOTALL)
+        if code_match:
+            action = code_match.group(1).strip()
+        else:
+            action_match = re.search(r'Action:\s*(.*?)(?=$|\n(?:Thought|Observation):)', text, re.IGNORECASE | re.DOTALL)
+            if action_match:
+                action = action_match.group(1).strip()
 
-        return thought.strip(), action.strip()
+        return thought, action
