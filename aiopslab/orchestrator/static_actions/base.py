@@ -122,14 +122,47 @@ class StaticTaskActions:
         return df.to_string(index=False)
 
     @log_action
-    def search_logs(self, namespace: str, keyword: str,
-                    start_time=None, end_time=None, limit: int = 100) -> str:
-        """Case-insensitive keyword search over logs. Returns matching rows. start_time/end_time: Unix timestamps (s)."""
-        df = self.static_app.search_logs_df(namespace, keyword, start_time=start_time, end_time=end_time, limit=limit)
+    def search_logs(self, namespace: str, keyword: str = None,
+                    start_time=None, end_time=None, limit: int = 100,
+                    service: str = None) -> str:
+        """Search logs by service name and/or keyword within a time window.
+
+        Either `service` or `keyword` (or both) may be provided.
+        - service: filter to a specific component (case-insensitive substring).
+        - keyword: search across log text (value/message), cmdb_id, and log_name columns.
+
+        Returns a summary (counts by service and log type) followed by the matching rows.
+        """
+        if keyword is None and service is None:
+            return "Provide at least one of: keyword or service."
+
+        df = self.static_app.search_logs_df(
+            namespace, keyword,
+            start_time=start_time, end_time=end_time,
+            limit=limit, service=service,
+        )
+
+        query_desc = " | ".join(filter(None, [
+            f"service='{service}'" if service else None,
+            f"keyword='{keyword}'" if keyword else None,
+        ]))
+
         if df.empty:
-            return f"No log entries matching '{keyword}' found in namespace '{namespace}'"
-        header = f"Log search results for '{keyword}' in '{namespace}' — {len(df)} rows (limit={limit}):"
-        return header + "\n" + df.to_string(index=False)
+            return f"No log entries found in '{namespace}' for {query_desc}"
+
+        # Summary header: counts by service and log type
+        lines = [f"Log search [{query_desc}] in '{namespace}' — {len(df)} rows (limit={limit}):"]
+        svc_col = next((c for c in ["cmdb_id", "service", "service_name"] if c in df.columns), None)
+        type_col = next((c for c in ["log_name", "level", "log_type"] if c in df.columns), None)
+        if svc_col:
+            counts = df[svc_col].value_counts().to_dict()
+            lines.append("  By service: " + ", ".join(f"{k}:{v}" for k, v in counts.items()))
+        if type_col:
+            counts = df[type_col].value_counts().to_dict()
+            lines.append("  By log type: " + ", ".join(f"{k}:{v}" for k, v in counts.items()))
+        lines.append("")
+        lines.append(df.to_string(index=False))
+        return "\n".join(lines)
 
     # -------------------------------------------------------------------------
     # get_* : fetch from source → save to local CSV → return path
