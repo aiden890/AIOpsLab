@@ -6,11 +6,15 @@
 
   "telemetry": {
     "enable_trace": true,
-    "enable_log": true,
+    "enable_log": false,
     "enable_metric": true
   },
 
   "executor": {
+    "enable": true
+  },
+
+  "hypothesis": {
     "enable": true
   },
 

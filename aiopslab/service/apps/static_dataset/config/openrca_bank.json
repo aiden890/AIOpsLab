@@ -14,6 +14,10 @@
     "enable": true
   },
 
+  "hypothesis": {
+    "enable": true
+  },
+
   "query": {
     "enable": true,
     "query_file": "query.csv",
