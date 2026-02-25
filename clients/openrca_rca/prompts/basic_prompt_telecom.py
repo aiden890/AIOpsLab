@@ -179,9 +179,12 @@ def build_schema(condition="all"):
             + "\n".join(timestamps))
         cn += 1
 
+    # Done: Changed from UTC+8 to UTC
+    # cl.append(
+    #     f"\n\n{cn}. Please use the UTC+8 time zone in all analysis steps "
+    #     f"since system is deployed in China/Hong Kong/Singapore.")
     cl.append(
-        f"\n\n{cn}. Please use the UTC+8 time zone in all analysis steps "
-        f"since system is deployed in China/Hong Kong/Singapore.")
+        f"\n\n{cn}. Please use the UTC time zone in all analysis steps ")
 
     sections.append("".join(cl))
 
