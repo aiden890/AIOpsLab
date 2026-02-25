@@ -288,6 +288,12 @@ def _compute_kpi_deviation(
     merged[dev_high_col] = (merged["max_value"] - merged[p_high_label]).clip(lower=0)
     merged[dev_low_col]  = (merged[p_low_label] - merged["min_value"]).clip(lower=0)
 
+    # Relative deviation = absolute deviation / baseline (clamped to ≥1 to avoid /0).
+    # Sorting by relative deviation ensures CPU/network KPIs (small units but large % spike)
+    # rank above memory KPIs (large absolute bytes but modest % increase).
+    merged["_rel_high"] = merged[dev_high_col] / merged[p_high_label].abs().clip(lower=1.0)
+    merged["_rel_low"]  = merged[dev_low_col]  / merged[p_low_label].abs().clip(lower=1.0)
+
     if has_ts:
         for col in ["peak_high_ts", "peak_low_ts"]:
             merged[col] = (
@@ -302,17 +308,17 @@ def _compute_kpi_deviation(
         low_cols.append("peak_low_ts")
 
     high = (
-        merged[merged[dev_high_col] > 0][high_cols]
-        .sort_values(dev_high_col, ascending=False)
-        .head(top_n)
+        merged[merged[dev_high_col] > 0]
+        .sort_values("_rel_high", ascending=False)
+        .head(top_n)[high_cols]
         .rename(columns={cmdb_col: "component", name_col: "kpi"})
         .round(4)
         .reset_index(drop=True)
     )
     low = (
-        merged[merged[dev_low_col] > 0][low_cols]
-        .sort_values(dev_low_col, ascending=False)
-        .head(top_n)
+        merged[merged[dev_low_col] > 0]
+        .sort_values("_rel_low", ascending=False)
+        .head(top_n)[low_cols]
         .rename(columns={cmdb_col: "component", name_col: "kpi"})
         .round(4)
         .reset_index(drop=True)

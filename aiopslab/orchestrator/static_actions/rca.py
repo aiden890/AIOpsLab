@@ -141,7 +141,6 @@ def _analyze_traces(df: _pd.DataFrame, faulty_components=None,
     Signal A (callee): dsName has high fail_rate → db/service fault.
     Signal B (caller): cmdb_id has high elapsed_ratio vs peer group → CPU/network fault.
     Signal C (network gap): parent.duration - sum(child.duration) gap ratio vs peer group
-                            → network latency / packet loss fault.
     Combined score = A * 3 + B + C * 2.
 
     raw_df: original (pre-normalization) span rows needed for Signal C. If None or
@@ -423,7 +422,11 @@ class StaticRCAActions(StaticTaskActions):
 
         # Keep raw_df for Signal C (parent-child gap); normalize for A and B
         norm_df = _normalize_trace_schema(raw_df)
-        result = _analyze_traces(norm_df, faulty_components, raw_df=raw_df)
+
+        # If no explicit faulty_components, default to possible_components so trace
+        # analysis never returns components outside the allowed candidate set
+        effective_components = faulty_components or (self.possible_components or None)
+        result = _analyze_traces(norm_df, effective_components, raw_df=raw_df)
         if result is None:
             return "Trace analysis: could not identify a faulty component (insufficient data)."
 
