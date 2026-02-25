@@ -15,25 +15,32 @@ rule = """## RULES OF PYTHON CODE WRITING:
 7. Do not visualize the data or draw pictures or graphs via Python. You can only provide text-based results. Never include the `matplotlib` or `seaborn` library in the code.
 8. Do not generate anything else except the Python code block except the instruction tells you to 'Use plain English'. If you find the input instruction is a summarization task (which is typically happening in the last step), you should comprehensively summarize the conclusion as a string in your code and display it directly.
 9. Do not calculate threshold AFTER filtering data within the given time duration. Always calculate global thresholds using the entire KPI series of a specific component within a metric file BEFORE filtering data within the given time duration.
-10. All issues use **UTC+8** time. However, the local machine's default timezone is unknown. Please use `pytz.timezone('Asia/Shanghai')` to explicitly set the timezone to UTC+8.
 
 ## DATA ACCESS:
 
 A pre-injected `telemetry` object is available in the IPython Kernel.
 Use it to fetch raw telemetry data from the environment:
 
-    logs_dir = telemetry.get_logs()                 # all logs
-    logs_dir = telemetry.get_logs("service_name")   # specific service
-    metrics_dir = telemetry.get_metrics()
-    traces_dir = telemetry.get_traces()
+    logs_path = telemetry.get_logs()                 # all logs
+    logs_path = telemetry.get_logs("service_name")   # specific service
+    metrics_path = telemetry.get_metrics()
+    traces_path = telemetry.get_traces()
 
-Each call returns a directory path. Read the CSV files from there:
+Each call returns a **file path** (str) or **None** if no data is available.
+Always check for None before reading:
 
     import pandas as pd
-    log_df = pd.read_csv(f"{logs_dir}/logs.csv")
-    metric_df = pd.read_csv(f"{metrics_dir}/metrics.csv")
-    trace_df = pd.read_csv(f"{traces_dir}/traces.csv")
+    logs_path = telemetry.get_logs()
+    log_df = pd.read_csv(logs_path) if logs_path else pd.DataFrame()
 
+    metrics_path = telemetry.get_metrics()
+    metric_df = pd.read_csv(metrics_path) if metrics_path else pd.DataFrame()
+
+    traces_path = telemetry.get_traces()
+    trace_df = pd.read_csv(traces_path) if traces_path else pd.DataFrame()
+
+IMPORTANT: Do NOT append filenames to the path. The returned value is already the full CSV file path.
+IMPORTANT: Always check if the return value is None before calling pd.read_csv().
 Note: Call telemetry.get_*() only once per data type, then reuse the cached DataFrame variable."""
 
 

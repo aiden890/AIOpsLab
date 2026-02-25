@@ -7,6 +7,7 @@ from enum import Enum
 from colorama import Fore, Style
 from datetime import datetime
 from pathlib import Path
+import logging
 import re
 
 from aiopslab.config import Config
@@ -39,6 +40,7 @@ class SessionPrint:
         self.step_count = 0
         self.log_file = None
         self.log_filepath = None
+        self._logging_handler = None
 
     def init_log_file(self, filepath):
         """Initialize log file for session output."""
@@ -47,6 +49,16 @@ class SessionPrint:
             # Create parent directories if needed
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
             self.log_file = open(filepath, 'w', encoding='utf-8')
+            self.step_count = 0
+
+            # Attach Python logging FileHandler to the same file
+            # so executor/agent debug logs also go to the session log
+            self._logging_handler = logging.FileHandler(filepath, mode='a', encoding='utf-8')
+            self._logging_handler.setLevel(logging.DEBUG)
+            self._logging_handler.setFormatter(
+                logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
+            )
+            logging.getLogger().addHandler(self._logging_handler)
 
             # Always print log file path to terminal
             print(f"{Fore.CYAN}📝 Session log:{Style.RESET_ALL} {filepath}")
@@ -55,6 +67,12 @@ class SessionPrint:
 
     def close_log_file(self):
         """Close the log file."""
+        # Remove Python logging FileHandler first
+        if self._logging_handler:
+            logging.getLogger().removeHandler(self._logging_handler)
+            self._logging_handler.close()
+            self._logging_handler = None
+
         if self.log_file:
             self._log(f"\nSession log ended at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             self.log_file.close()
@@ -235,23 +253,28 @@ class SessionPrint:
 
     def _parse_react_response(self, text):
         """Parse ReAct format response into thought and action components.
-        Returns empty strings if not in ReAct format."""
 
+        Handles two formats:
+          1. "Thought: ...\n```\naction()\n```"  (structured JSON agent)
+          2. "Thought: ...\nAction: ..."          (plain text ReAct agent)
+
+        Returns ("", "") if neither format is detected.
+        """
         thought = ""
         action = ""
 
-        # Check if text contains ReAct markers (case-insensitive)
-        if 'thought:' not in text.lower() and 'action:' not in text.lower():
-            return "", ""
-
-        # Extract thought section
-        thought_match = re.search(r'Thought:\s*(.*?)(?=\nAction:|$)', text, re.IGNORECASE | re.DOTALL)
+        # Extract thought (stops at code block or Action: marker)
+        thought_match = re.search(r'Thought:\s*(.*?)(?=\n```|\nAction:|$)', text, re.IGNORECASE | re.DOTALL)
         if thought_match:
             thought = thought_match.group(1).strip()
 
-        # Extract action section - only content within code blocks
-        action_match = re.search(r'Action:\s*(.*?)(?=$|\n(?:Thought|Action|Observation):)', text, re.IGNORECASE | re.DOTALL)
-        if action_match:
-            action = action_match.group(1).strip()
+        # Prefer code block as action; fall back to Action: marker
+        code_match = re.search(r'```[^\n]*\n(.*?)\n```', text, re.DOTALL)
+        if code_match:
+            action = code_match.group(1).strip()
+        else:
+            action_match = re.search(r'Action:\s*(.*?)(?=$|\n(?:Thought|Observation):)', text, re.IGNORECASE | re.DOTALL)
+            if action_match:
+                action = action_match.group(1).strip()
 
-        return thought.strip(), action.strip()
+        return thought, action

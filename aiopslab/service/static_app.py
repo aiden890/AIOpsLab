@@ -16,23 +16,75 @@ import pandas as pd
 from pathlib import Path
 
 
-def _filter_by_time(df: pd.DataFrame, duration_minutes: int,
-                    timestamp_col: str = "timestamp") -> pd.DataFrame:
-    """Filter DataFrame to rows within the last N minutes.
+def _to_unix(t) -> float | None:
+    """Convert t to Unix timestamp (float). Handles int, float, or datetime string."""
+    if t is None:
+        return None
+    if isinstance(t, (int, float)):
+        return float(t)
+    if isinstance(t, str):
+        try:
+            ts = pd.Timestamp(t)
+            if ts.tzinfo is None:
+                ts = ts.tz_localize("UTC")
+            return ts.timestamp()
+        except Exception:
+            return None
+    return float(t)
 
-    Returns all data if duration_minutes is 0/None or no rows match.
+
+def _filter_by_time(df: pd.DataFrame,
+                    timestamp_col: str = "timestamp",
+                    start_time=None, end_time=None) -> pd.DataFrame:
+    """Filter DataFrame to rows within [start_time, end_time] (Unix timestamps or datetime strings).
+
+    Returns all data if neither bound is specified or no rows match.
     """
     if df.empty or timestamp_col not in df.columns:
         return df
-    if not duration_minutes:
+
+    start_ts = _to_unix(start_time)
+    end_ts = _to_unix(end_time)
+
+    if start_ts is None and end_ts is None:
         return df
 
-    now = datetime.now().timestamp()
-    cutoff = now - (duration_minutes * 60)
-    filtered = df[df[timestamp_col] >= cutoff]
+    filtered = df.copy()
+    if start_ts is not None:
+        filtered = filtered[filtered[timestamp_col] >= start_ts]
+    if end_ts is not None:
+        filtered = filtered[filtered[timestamp_col] <= end_ts]
 
-    if filtered.empty and not df.empty:
+    return filtered if not filtered.empty else df
+
+
+def _filter_by_time_strict(df: pd.DataFrame,
+                            timestamp_col: str = "timestamp",
+                            start_time=None, end_time=None) -> pd.DataFrame:
+    """Filter DataFrame to rows within [start_time, end_time] — strict, no fallback.
+
+    Unlike _filter_by_time, returns an empty DataFrame if no rows match the window.
+    Use this when the caller needs to distinguish "no data in window" from "all data".
+    """
+
+    if df.empty or timestamp_col not in df.columns:
+        print(f"Warning: No timestamp column found in {df.columns}")
         return df
+
+    start_ts = _to_unix(start_time)
+    end_ts = _to_unix(end_time)
+
+
+    if start_ts is None and end_ts is None:
+        return df
+
+    filtered = df.copy()
+    if start_ts is not None:
+        filtered = filtered[filtered[timestamp_col] >= start_ts]
+
+    if end_ts is not None:
+        filtered = filtered[filtered[timestamp_col] <= end_ts]
+
 
     return filtered
 
@@ -49,10 +101,12 @@ def _filter_logs(df: pd.DataFrame, service=None,
         if service_col:
             df = df[df[service_col].str.contains(service, case=False, na=False)]
 
-    if start_time and "timestamp" in df.columns:
-        df = df[df["timestamp"] >= start_time]
-    if end_time and "timestamp" in df.columns:
-        df = df[df["timestamp"] <= end_time]
+    start_ts = _to_unix(start_time)
+    end_ts = _to_unix(end_time)
+    if start_ts is not None and "timestamp" in df.columns:
+        df = df[df["timestamp"] >= start_ts]
+    if end_ts is not None and "timestamp" in df.columns:
+        df = df[df["timestamp"] <= end_ts]
 
     return df
 
@@ -84,13 +138,37 @@ def _compute_log_overview(df: pd.DataFrame) -> dict:
     return overview
 
 
-def _search_in_df(df: pd.DataFrame, keyword: str, limit: int = 100) -> pd.DataFrame:
-    """Search for keyword in text columns of a DataFrame."""
-    text_col = _detect_col(df, ["value", "message", "log_message", "content", "body"])
-    if text_col is None:
-        return pd.DataFrame()
-    mask = df[text_col].astype(str).str.contains(keyword, case=False, na=False, regex=False)
-    return df[mask].head(limit)
+def _search_in_df(df: pd.DataFrame, keyword: str = None, limit: int = 100,
+                  service: str = None) -> pd.DataFrame:
+    """Filter log rows by service and/or keyword.
+
+    - service: filters rows where cmdb_id matches (case-insensitive substring).
+    - keyword: searches across value/message (log text), cmdb_id, and log_name.
+    Either or both may be provided; at least one should be specified.
+    """
+    # Service filter
+    if service:
+        svc_col = _detect_col(df, ["cmdb_id", "service", "service_name"])
+        if svc_col:
+            df = df[df[svc_col].astype(str).str.contains(service, case=False, na=False)]
+
+    if df.empty:
+        return df
+
+    # Keyword filter (optional)
+    if keyword:
+        masks = []
+        for col in ["value", "message", "log_message", "content", "body",
+                    "cmdb_id", "log_name", "level", "log_type"]:
+            if col in df.columns:
+                masks.append(df[col].astype(str).str.contains(keyword, case=False, na=False, regex=False))
+        if masks:
+            combined = masks[0]
+            for m in masks[1:]:
+                combined = combined | m
+            df = df[combined]
+
+    return df.head(limit)
 
 
 def _compute_metric_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -148,6 +226,186 @@ def _compute_anomaly_metrics(
 
     result = pd.DataFrame(rows)
     return result.sort_values("is_anomaly", ascending=False).reset_index(drop=True)
+
+
+def _compute_kpi_deviation(
+    full_df: pd.DataFrame,
+    window_df: pd.DataFrame,
+    components: list | None = None,
+    top_n: int = 20,
+    high_pct: float = 0.90,
+    low_pct: float = 0.10,
+) -> dict:
+    """Compute percentile deviation for metric KPIs in a fault window vs full-dataset baseline.
+    
+    Returns dict with keys 'high' and 'low', each a sorted DataFrame.
+    """
+    cmdb_col = _detect_col(full_df, ["cmdb_id", "service", "service_name"])
+    ts_col   = _detect_col(full_df, ["timestamp", "startTime"])
+    name_col = _detect_col(full_df, ["name", "kpi_name", "kpi", "metric_name"])
+    if not cmdb_col or not name_col or "value" not in full_df.columns:
+        return {"high": pd.DataFrame(), "low": pd.DataFrame()}
+
+    if components:
+        full_df = full_df[full_df[cmdb_col].isin(components)]
+        if not window_df.empty:
+            window_df = window_df[window_df[cmdb_col].isin(components)]
+
+    if full_df.empty or window_df.empty:
+        return {"high": pd.DataFrame(), "low": pd.DataFrame()}
+
+    p_high_label = f"p{int(high_pct * 100)}"
+    p_low_label  = f"p{int(low_pct * 100)}"
+
+    # Baseline: global percentiles per (component, KPI) from the full dataset
+    baseline = (
+        full_df.groupby([cmdb_col, name_col])["value"]
+        .agg(**{
+            p_high_label: lambda x: x.quantile(high_pct),
+            p_low_label:  lambda x: x.quantile(low_pct),
+        })
+        .reset_index()
+    )
+
+    # Window stats: max, min, and the exact timestamp of each extreme
+    has_ts = ts_col is not None and ts_col in window_df.columns
+
+    def _agg_window(grp):
+        row: dict = {
+            "max_value": grp["value"].max(),
+            "min_value": grp["value"].min(),
+        }
+        if has_ts:
+            row["peak_high_ts"] = grp.loc[grp["value"].idxmax(), ts_col]
+            row["peak_low_ts"]  = grp.loc[grp["value"].idxmin(), ts_col]
+        return pd.Series(row)
+
+    window_stats = window_df.groupby([cmdb_col, name_col]).apply(_agg_window).reset_index()
+
+    merged = window_stats.merge(baseline, on=[cmdb_col, name_col], how="left")
+    dev_high_col = f"deviation_above_{p_high_label}"
+    dev_low_col  = f"drop_below_{p_low_label}"
+    merged[dev_high_col] = (merged["max_value"] - merged[p_high_label]).clip(lower=0)
+    merged[dev_low_col]  = (merged[p_low_label] - merged["min_value"]).clip(lower=0)
+
+    # Relative deviation = absolute deviation / baseline (clamped to ≥1 to avoid /0).
+    # Sorting by relative deviation ensures CPU/network KPIs (small units but large % spike)
+    # rank above memory KPIs (large absolute bytes but modest % increase).
+    merged["_rel_high"] = merged[dev_high_col] / merged[p_high_label].abs().clip(lower=1.0)
+    merged["_rel_low"]  = merged[dev_low_col]  / merged[p_low_label].abs().clip(lower=1.0)
+
+    if has_ts:
+        for col in ["peak_high_ts", "peak_low_ts"]:
+            merged[col] = (
+                pd.to_datetime(merged[col], unit="s", utc=True)
+                .dt.strftime("%Y-%m-%d %H:%M:%S")
+            )
+
+    high_cols = [cmdb_col, name_col, p_high_label, "max_value", dev_high_col]
+    low_cols  = [cmdb_col, name_col, p_low_label,  "min_value", dev_low_col]
+    if has_ts:
+        high_cols.append("peak_high_ts")
+        low_cols.append("peak_low_ts")
+
+    high = (
+        merged[merged[dev_high_col] > 0]
+        .sort_values("_rel_high", ascending=False)
+        .head(top_n)[high_cols]
+        .rename(columns={cmdb_col: "component", name_col: "kpi"})
+        .round(4)
+        .reset_index(drop=True)
+    )
+    low = (
+        merged[merged[dev_low_col] > 0]
+        .sort_values("_rel_low", ascending=False)
+        .head(top_n)[low_cols]
+        .rename(columns={cmdb_col: "component", name_col: "kpi"})
+        .round(4)
+        .reset_index(drop=True)
+    )
+
+    return {"high": high, "low": low}
+
+
+def _compute_kpi_deviation_table(
+    full_df: pd.DataFrame,
+    window_df: pd.DataFrame,
+    components: list | None = None,
+    high_pct: float = 0.90,
+    low_pct: float = 0.10,
+) -> pd.DataFrame:
+    """Return one-row-per-component summary of worst KPI deviations.
+
+    Columns: component, max_high_dev, top_high_kpi, peak_high_ts,
+                        max_low_dev,  top_low_kpi,  peak_low_ts.
+    Sorted by worst deviation descending. Shows ALL components (even those with dev=0).
+    """
+    cmdb_col = _detect_col(full_df, ["cmdb_id", "service", "service_name"])
+    name_col = _detect_col(full_df, ["name", "kpi_name", "kpi", "metric_name"])
+    ts_col   = _detect_col(full_df, ["timestamp", "startTime"])
+
+    if not cmdb_col or not name_col or "value" not in full_df.columns:
+        return pd.DataFrame()
+
+    if components:
+        full_df   = full_df[full_df[cmdb_col].isin(components)]
+        window_df = window_df[window_df[cmdb_col].isin(components)]
+
+    if full_df.empty or window_df.empty:
+        return pd.DataFrame()
+
+    baseline = (
+        full_df.groupby([cmdb_col, name_col])["value"]
+        .agg(p90=lambda x: x.quantile(high_pct), p10=lambda x: x.quantile(low_pct))
+        .reset_index()
+    )
+
+    has_ts = ts_col is not None and ts_col in window_df.columns
+
+    def _agg(grp):
+        row = {"max_value": grp["value"].max(), "min_value": grp["value"].min()}
+        if has_ts:
+            row["peak_high_ts"] = grp.loc[grp["value"].idxmax(), ts_col]
+            row["peak_low_ts"]  = grp.loc[grp["value"].idxmin(), ts_col]
+        return pd.Series(row)
+
+    window_stats = window_df.groupby([cmdb_col, name_col]).apply(_agg).reset_index()
+    merged = window_stats.merge(baseline, on=[cmdb_col, name_col], how="left")
+    merged["high_dev"] = (merged["max_value"] - merged["p90"]).clip(lower=0)
+    merged["low_dev"]  = (merged["p10"] - merged["min_value"]).clip(lower=0)
+
+    def _fmt_ts(ts):
+        if has_ts and pd.notna(ts):
+            try:
+                return pd.to_datetime(ts, unit="s", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return str(ts)
+        return "-"
+
+    all_comps = components if components else sorted(merged[cmdb_col].unique())
+    rows = []
+    for comp in all_comps:
+        grp = merged[merged[cmdb_col] == comp]
+        if grp.empty:
+            rows.append({"component": comp,
+                         "max_high_dev": 0, "top_high_kpi": "-", "peak_high_ts": "-",
+                         "max_low_dev":  0, "top_low_kpi":  "-", "peak_low_ts":  "-"})
+            continue
+        bh = grp.loc[grp["high_dev"].idxmax()]
+        bl = grp.loc[grp["low_dev"].idxmax()]
+        rows.append({
+            "component":    comp,
+            "max_high_dev": round(float(bh["high_dev"]), 2),
+            "top_high_kpi": bh[name_col] if bh["high_dev"] > 0 else "-",
+            "peak_high_ts": _fmt_ts(bh.get("peak_high_ts")) if bh["high_dev"] > 0 else "-",
+            "max_low_dev":  round(float(bl["low_dev"]), 2),
+            "top_low_kpi":  bl[name_col]  if bl["low_dev"]  > 0 else "-",
+            "peak_low_ts":  _fmt_ts(bl.get("peak_low_ts"))  if bl["low_dev"]  > 0 else "-",
+        })
+
+    df = pd.DataFrame(rows)
+    df["_sort"] = df[["max_high_dev", "max_low_dev"]].max(axis=1)
+    return df.sort_values("_sort", ascending=False).drop(columns=["_sort"]).reset_index(drop=True)
 
 
 def _compute_trace_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -209,19 +467,19 @@ class StaticApp:
         df = self._read_csv_files(log_dir)
         return _filter_logs(df, service)
 
-    def fetch_metrics_df(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_metrics_df(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         metric_dir = self._get_namespace_path(namespace) / "metrics"
         if not metric_dir.exists():
             return pd.DataFrame()
         df = self._read_csv_files(metric_dir)
-        return _filter_by_time(df, duration_minutes) if duration_minutes else df
+        return _filter_by_time(df, start_time=start_time, end_time=end_time)
 
-    def fetch_traces_df(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_traces_df(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         trace_dir = self._get_namespace_path(namespace) / "traces"
         if not trace_dir.exists():
             return pd.DataFrame()
         df = self._read_csv_files(trace_dir)
-        return _filter_by_time(df, duration_minutes) if duration_minutes else df
+        return _filter_by_time(df, start_time=start_time, end_time=end_time)
 
     # -- New analytical methods --
 
@@ -235,20 +493,20 @@ class StaticApp:
             return {}
         return _compute_log_overview(df)
 
-    def search_logs_df(self, namespace: str, keyword: str,
-                       duration_minutes: int = None, limit: int = 100) -> pd.DataFrame:
-        """Search log value field for a keyword."""
+    def search_logs_df(self, namespace: str, keyword: str = None,
+                       start_time=None, end_time=None, limit: int = 100,
+                       service: str = None) -> pd.DataFrame:
+        """Filter logs by service and/or keyword. Both are optional; at least one should be given."""
         log_dir = self._get_namespace_path(namespace) / "logs"
         if not log_dir.exists():
             return pd.DataFrame()
         df = self._read_csv_files(log_dir)
         if df.empty:
             return pd.DataFrame()
-        if duration_minutes:
-            df = _filter_by_time(df, duration_minutes)
-        return _search_in_df(df, keyword, limit)
+        df = _filter_by_time(df, start_time=start_time, end_time=end_time)
+        return _search_in_df(df, keyword, limit, service=service)
 
-    def fetch_metric_summary(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_metric_summary(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         """Return per-service aggregated metric stats."""
         metric_dir = self._get_namespace_path(namespace) / "metrics"
         if not metric_dir.exists():
@@ -256,11 +514,10 @@ class StaticApp:
         df = self._read_csv_files(metric_dir)
         if df.empty:
             return pd.DataFrame()
-        if duration_minutes:
-            df = _filter_by_time(df, duration_minutes)
+        df = _filter_by_time(df, start_time=start_time, end_time=end_time)
         return _compute_metric_summary(df)
 
-    def fetch_anomaly_metrics(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_anomaly_metrics(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         """Return services with degraded success rate or high response time."""
         metric_dir = self._get_namespace_path(namespace) / "metrics"
         if not metric_dir.exists():
@@ -268,11 +525,10 @@ class StaticApp:
         df = self._read_csv_files(metric_dir)
         if df.empty:
             return pd.DataFrame()
-        if duration_minutes:
-            df = _filter_by_time(df, duration_minutes)
+        df = _filter_by_time(df, start_time=start_time, end_time=end_time)
         return _compute_anomaly_metrics(df)
 
-    def fetch_trace_summary(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_trace_summary(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         """Return aggregated trace stats per service."""
         trace_dir = self._get_namespace_path(namespace) / "traces"
         if not trace_dir.exists():
@@ -280,11 +536,72 @@ class StaticApp:
         df = self._read_csv_files(trace_dir)
         if df.empty:
             return pd.DataFrame()
-        if duration_minutes:
-            df = _filter_by_time(df, duration_minutes)
+        df = _filter_by_time(df, start_time=start_time, end_time=end_time)
         return _compute_trace_summary(df)
 
-    # -- Convenience string-returning methods --
+    def _fetch_kpi_deviation_impl(
+        self, namespace: str,
+        start_time=None, end_time=None,
+        components: list | None = None,
+        top_n: int = 20,
+        high_pct: float = 0.90,
+        low_pct: float = 0.10,
+    ) -> dict:
+        metric_dir = self._get_namespace_path(namespace) / "metrics"
+        if not metric_dir.exists():
+            return {"high": pd.DataFrame(), "low": pd.DataFrame()}
+        full_df = self._read_csv_files(metric_dir)
+        if full_df.empty:
+            return {"high": pd.DataFrame(), "low": pd.DataFrame()}
+        ts_col = _detect_col(full_df, ["timestamp", "startTime"])
+        window_df = _filter_by_time_strict(full_df, timestamp_col=ts_col or "timestamp",
+                                           start_time=start_time, end_time=end_time)
+        if window_df.empty:
+            return {"high": pd.DataFrame(), "low": pd.DataFrame()}
+        return _compute_kpi_deviation(full_df, window_df, components=components,
+                                      top_n=top_n, high_pct=high_pct, low_pct=low_pct)
+
+    def fetch_kpi_high_deviation(self, namespace: str, start_time=None, end_time=None,
+                                  components=None, top_n: int = 20) -> pd.DataFrame:
+        """Return components whose KPI values exceed the P90 baseline in the fault window."""
+        return self._fetch_kpi_deviation_impl(
+            namespace, start_time=start_time, end_time=end_time,
+            components=components, top_n=top_n, high_pct=0.90, low_pct=0.10,
+        )["high"]
+
+    def fetch_kpi_low_deviation(self, namespace: str, start_time=None, end_time=None,
+                                 components=None, top_n: int = 20) -> pd.DataFrame:
+        """Return components whose KPI values drop below the P10 baseline in the fault window."""
+        return self._fetch_kpi_deviation_impl(
+            namespace, start_time=start_time, end_time=end_time,
+            components=components, top_n=top_n, high_pct=0.90, low_pct=0.10,
+        )["low"]
+
+    def fetch_component_kpi_deviation(self, namespace: str, component: str,
+                                       start_time=None, end_time=None) -> dict:
+        """Return all HIGH and LOW KPI deviations for a single component."""
+        return self._fetch_kpi_deviation_impl(
+            namespace, start_time=start_time, end_time=end_time,
+            components=[component], top_n=50, high_pct=0.90, low_pct=0.10,
+        )
+
+    def fetch_kpi_deviation_table(self, namespace: str, start_time=None, end_time=None,
+                                   components: list | None = None) -> pd.DataFrame:
+        """Return one-row-per-component worst-KPI deviation summary table."""
+        metric_dir = self._get_namespace_path(namespace) / "metrics"
+        if not metric_dir.exists():
+            return pd.DataFrame()
+        full_df = self._read_csv_files(metric_dir)
+        if full_df.empty:
+            return pd.DataFrame()
+        ts_col = _detect_col(full_df, ["timestamp", "startTime"])
+        window_df = _filter_by_time_strict(full_df, timestamp_col=ts_col or "timestamp",
+                                           start_time=start_time, end_time=end_time)
+        if window_df.empty:
+            return pd.DataFrame()
+        return _compute_kpi_deviation_table(full_df, window_df, components=components)
+
+    # -- Convenience string-returning methods -- (StaticApp only)
 
     def get_logs(self, namespace: str, service: str = None,
                  start_time=None, end_time=None) -> str:
@@ -468,13 +785,13 @@ class DockerStaticApp:
         df = _filter_logs(df, service)
         return df.head(limit) if limit else df
 
-    def fetch_metrics_df(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_metrics_df(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         df = self._read_telemetry_df(namespace, "metrics")
-        return _filter_by_time(df, duration_minutes) if duration_minutes else df
+        return _filter_by_time(df, start_time=start_time, end_time=end_time)
 
-    def fetch_traces_df(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_traces_df(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         df = self._read_telemetry_df(namespace, "traces")
-        return _filter_by_time(df, duration_minutes) if duration_minutes else df
+        return _filter_by_time(df, start_time=start_time, end_time=end_time)
 
     # -- New analytical methods --
 
@@ -485,39 +802,92 @@ class DockerStaticApp:
             return {}
         return _compute_log_overview(df)
 
-    def search_logs_df(self, namespace: str, keyword: str,
-                       duration_minutes: int = None, limit: int = 100) -> pd.DataFrame:
-        """Search log value field for a keyword."""
+    def search_logs_df(self, namespace: str, keyword: str = None,
+                       start_time=None, end_time=None, limit: int = 100,
+                       service: str = None) -> pd.DataFrame:
+        """Filter logs by service and/or keyword. Both are optional; at least one should be given."""
         df = self._read_telemetry_df(namespace, "logs")
         if df.empty:
             return pd.DataFrame()
-        if duration_minutes:
-            df = _filter_by_time(df, duration_minutes)
-        return _search_in_df(df, keyword, limit)
+        df = _filter_by_time(df, start_time=start_time, end_time=end_time)
+        return _search_in_df(df, keyword, limit, service=service)
 
-    def fetch_metric_summary(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_metric_summary(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         """Return per-service aggregated metric stats."""
         df = self._read_telemetry_df(namespace, "metrics")
         if df.empty:
             return pd.DataFrame()
-        if duration_minutes:
-            df = _filter_by_time(df, duration_minutes)
+        df = _filter_by_time(df, start_time=start_time, end_time=end_time)
         return _compute_metric_summary(df)
 
-    def fetch_anomaly_metrics(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_anomaly_metrics(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         """Return services with degraded success rate or high response time."""
         df = self._read_telemetry_df(namespace, "metrics")
         if df.empty:
             return pd.DataFrame()
-        if duration_minutes:
-            df = _filter_by_time(df, duration_minutes)
+        df = _filter_by_time(df, start_time=start_time, end_time=end_time)
         return _compute_anomaly_metrics(df)
 
-    def fetch_trace_summary(self, namespace: str, duration_minutes: int = None) -> pd.DataFrame:
+    def fetch_trace_summary(self, namespace: str, start_time=None, end_time=None) -> pd.DataFrame:
         """Return aggregated trace stats per service."""
         df = self._read_telemetry_df(namespace, "traces")
         if df.empty:
             return pd.DataFrame()
-        if duration_minutes:
-            df = _filter_by_time(df, duration_minutes)
+        df = _filter_by_time(df, start_time=start_time, end_time=end_time)
         return _compute_trace_summary(df)
+
+    def _fetch_kpi_deviation_impl(
+        self, namespace: str,
+        start_time=None, end_time=None,
+        components: list | None = None,
+        top_n: int = 20,
+        high_pct: float = 0.90,
+        low_pct: float = 0.10,
+    ) -> dict:
+        full_df = self._read_telemetry_df(namespace, "metrics")
+        if full_df.empty:
+            return {"high": pd.DataFrame(), "low": pd.DataFrame()}
+        ts_col = _detect_col(full_df, ["timestamp", "startTime"])
+        window_df = _filter_by_time_strict(full_df, timestamp_col=ts_col or "timestamp",
+                                           start_time=start_time, end_time=end_time)
+        if window_df.empty:
+            return {"high": pd.DataFrame(), "low": pd.DataFrame()}
+        return _compute_kpi_deviation(full_df, window_df, components=components,
+                                      top_n=top_n, high_pct=high_pct, low_pct=low_pct)
+
+    def fetch_kpi_high_deviation(self, namespace: str, start_time=None, end_time=None,
+                                  components=None, top_n: int = 20) -> pd.DataFrame:
+        """Return components whose KPI values exceed the P90 baseline in the fault window."""
+        return self._fetch_kpi_deviation_impl(
+            namespace, start_time=start_time, end_time=end_time,
+            components=components, top_n=top_n, high_pct=0.90, low_pct=0.10,
+        )["high"]
+
+    def fetch_kpi_low_deviation(self, namespace: str, start_time=None, end_time=None,
+                                 components=None, top_n: int = 20) -> pd.DataFrame:
+        """Return components whose KPI values drop below the P10 baseline in the fault window."""
+        return self._fetch_kpi_deviation_impl(
+            namespace, start_time=start_time, end_time=end_time,
+            components=components, top_n=top_n, high_pct=0.90, low_pct=0.10,
+        )["low"]
+
+    def fetch_component_kpi_deviation(self, namespace: str, component: str,
+                                       start_time=None, end_time=None) -> dict:
+        """Return all HIGH and LOW KPI deviations for a single component."""
+        return self._fetch_kpi_deviation_impl(
+            namespace, start_time=start_time, end_time=end_time,
+            components=[component], top_n=50, high_pct=0.90, low_pct=0.10,
+        )
+
+    def fetch_kpi_deviation_table(self, namespace: str, start_time=None, end_time=None,
+                                   components: list | None = None) -> pd.DataFrame:
+        """Return one-row-per-component worst-KPI deviation summary table."""
+        full_df = self._read_telemetry_df(namespace, "metrics")
+        if full_df.empty:
+            return pd.DataFrame()
+        ts_col = _detect_col(full_df, ["timestamp", "startTime"])
+        window_df = _filter_by_time_strict(full_df, timestamp_col=ts_col or "timestamp",
+                                           start_time=start_time, end_time=end_time)
+        if window_df.empty:
+            return pd.DataFrame()
+        return _compute_kpi_deviation_table(full_df, window_df, components=components)

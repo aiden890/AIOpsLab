@@ -86,14 +86,23 @@ class BaseOrchestrator:
         """Teardown environment after running the problem. Override in subclasses."""
         raise NotImplementedError
 
-    def init_problem(self, problem_id: str):
-        """Initialize a problem instance for the agent to solve."""
+    def init_problem(self, problem_id: str, work_dir: str = None,
+                     condition: str = None):
+        """Initialize a problem instance for the agent to solve.
+
+        Args:
+            problem_id: The problem identifier.
+            work_dir: Directory for saving telemetry CSV files.
+                      Use unique paths for parallel runs to avoid conflicts.
+            condition: Telemetry ablation condition for container isolation.
+        """
         self.execution_start_time = time.time()
 
         self.session = Session(results_dir=self.results_dir, eval_id=self.eval_id)
         print(f"Session ID: {self.session.session_id}")
 
-        prob = self.probs.get_problem_instance(problem_id)
+        prob = self.probs.get_problem_instance(problem_id, work_dir=work_dir,
+                                               condition=condition)
         deployment = self.probs.get_problem_deployment(problem_id)
         self.session.set_problem(prob, pid=problem_id)
         self.session.set_agent(self.agent_name)

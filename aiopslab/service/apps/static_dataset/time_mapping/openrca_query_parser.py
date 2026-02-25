@@ -100,19 +100,26 @@ class OpenRCAQueryParser(BaseQueryParser):
         Supported formats:
         - "March 4, 2021, within the time range of 14:30 to 15:00"
         - "April 11, 2020, from 00:00 to 00:30"
+        - "April 11, 2020, between 02:00 and 02:30"
         - "between 2021-03-04 14:30:00 and 2021-03-04 15:00:00"
         - "on 2022-03-20 from 09:00 to 10:00"
+        - "March 6, 2021, from 23:30 to March 7, 2021, at 00:00"  (cross-day)
         """
         patterns = [
-            # Pattern 1: "March 4, 2021" + "14:30 to 15:00"
+            # Pattern 7 (cross-day): "Month DD, YYYY, from HH:MM to Month DD, YYYY, [at] HH:MM"
+            # Must come before Pattern 1/2 to avoid partial match on the trailing date
+            (r'(\w+ \d+, \d{4}).*?from\s+(\d{1,2}:\d{2})\s+to\s+(\w+ \d+, \d{4}),?\s*(?:at\s+)?(\d{1,2}:\d{2})', 'cross_day'),
+            # Pattern 1: "March 4, 2021" + "14:30 to 15:00" (also catches "between HH:MM to HH:MM")
             (r'(\w+ \d+, \d{4}).*?(\d{1,2}:\d{2})\s+to\s+(\d{1,2}:\d{2})', 'month_day_year_time'),
             # Pattern 2: "April 11, 2020" + "from 00:00 to 00:30"
             (r'(\w+ \d+, \d{4}).*?from\s+(\d{1,2}:\d{2})\s+to\s+(\d{1,2}:\d{2})', 'month_day_year_time'),
+            # Pattern 6: "April 11, 2020, between 02:00 and 02:30" (date-first "and" separator)
+            (r'(\w+ \d+, \d{4}).*?between\s+(\d{1,2}:\d{2})\s+and\s+(\d{1,2}:\d{2})', 'month_day_year_time'),
             # Pattern 3: Full datetime
             (r'(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?:and|to)\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})', 'full_datetime'),
             # Pattern 4: "on 2022-03-20 from 09:00 to 10:00"
             (r'on\s+(\d{4}-\d{2}-\d{2}).*?from\s+(\d{1,2}:\d{2})\s+to\s+(\d{1,2}:\d{2})', 'date_time_range'),
-            # Pattern 5: "between 14:30 and 15:00 on March 4, 2021"
+            # Pattern 5: "between 14:30 and 15:00 on March 4, 2021" (time-first)
             (r'between\s+(\d{1,2}:\d{2})\s+and\s+(\d{1,2}:\d{2}).*?on\s+(\w+ \d+, \d{4})', 'time_first'),
         ]
 
@@ -161,6 +168,23 @@ class OpenRCAQueryParser(BaseQueryParser):
 
                 start_dt = datetime.strptime(f"{date_str} {start_time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=_UTC_PLUS_8)
                 end_dt = datetime.strptime(f"{date_str} {end_time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=_UTC_PLUS_8)
+
+            elif pattern_type == 'cross_day':
+                # "March 6, 2021" + "23:30" + "March 7, 2021" + "00:00"
+                start_date_str = groups[0]
+                start_time_str = groups[1]
+                end_date_str   = groups[2]
+                end_time_str   = groups[3]
+
+                start_date_obj = datetime.strptime(start_date_str, "%B %d, %Y")
+                end_date_obj   = datetime.strptime(end_date_str, "%B %d, %Y")
+
+                start_dt = datetime.strptime(
+                    f"{start_date_obj.date()} {start_time_str}", "%Y-%m-%d %H:%M"
+                ).replace(tzinfo=_UTC_PLUS_8)
+                end_dt = datetime.strptime(
+                    f"{end_date_obj.date()} {end_time_str}", "%Y-%m-%d %H:%M"
+                ).replace(tzinfo=_UTC_PLUS_8)
 
             elif pattern_type == 'time_first':
                 # "14:30" + "15:00" + "March 4, 2021"
@@ -244,6 +268,13 @@ class OpenRCAQueryParser(BaseQueryParser):
             new = f"{start_utc.strftime('%B')} {start_utc.day}, {start_utc.year}"
             result = result.replace(orig, new)
             result = result.replace(start_dt.strftime("%Y-%m-%d"), start_utc.strftime("%Y-%m-%d"))
+
+        # Replace end date if it changed (e.g. cross-day range: "March 7" → "March 6")
+        if end_dt.date() != end_utc.date() and end_dt.date() != start_dt.date():
+            orig_end = f"{end_dt.strftime('%B')} {end_dt.day}, {end_dt.year}"
+            new_end  = f"{end_utc.strftime('%B')} {end_utc.day}, {end_utc.year}"
+            result = result.replace(orig_end, new_end)
+            result = result.replace(end_dt.strftime("%Y-%m-%d"), end_utc.strftime("%Y-%m-%d"))
 
         return result
 

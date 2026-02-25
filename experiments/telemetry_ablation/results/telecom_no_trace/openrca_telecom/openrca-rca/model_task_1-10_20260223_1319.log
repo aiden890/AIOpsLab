@@ -1,0 +1,340 @@
+Session log started at 2026-02-23 13:19:42
+
+
+============================================================
+Step 1
+============================================================
+🤖 Agent Response:
+   ```
+execute("Load all available metric files for the namespace 'static-telecom-no-trace' including node metrics, container metrics, and service metrics. For each metric file, list all unique component IDs and all unique KPI names available. This will help to understand which KPIs are available for each component type and prepare for global threshold calculation.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "For the namespace 'static-telecom-no-trace', the available metric files include node metrics, container metrics, "
+    "and service metrics. The node metrics cover components with IDs from os_001 to os_022 and include KPIs such as CPU usage, "
+    "memory buffers, and agent ping. The container metrics cover components docker_001 to docker_008 with KPIs related to container CPU, "
+    "memory, and garbage collection. The service metrics cover components db_001 to db_013 and include a wide range of KPIs like CPU usage, "
+    "memory, and various database-specific metrics. This provides a comprehensive set of KPIs for each component type to support global threshold calculation."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+component_type                               unique_component_ids                                   unique_kpi_names
+0             os  [os_001, os_002, os_003, os_004, os_005, os_00...  [Agent_ping, Buffers_used, CPU_idle_pct, CPU_i...
+1         docker  [docker_001, docker_002, docker_003, docker_00...  [container_cpu_used, container_fgc, container_...
+2             db  [db_001, db_002, db_003, db_004, db_005, db_00...  [ACS, AIOS, AWS, Asm_Free_Tb, CPU_Used_Pct, CP...
+------------------------------------------------------------
+
+
+============================================================
+Step 2
+============================================================
+🤖 Agent Response:
+   ```
+execute("For each metric file (node, container, service), aggregate the KPI time series for each component-KPI pair over the entire available data. Calculate global thresholds for each KPI: use the 95th percentile (P95) for KPIs where high values indicate faults, and the 5th percentile (P5) for KPIs where low values indicate faults (e.g., success rate). Return a summary table listing each component-KPI pair with its calculated global threshold and the threshold type (high or low).")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "Global thresholds for each component-KPI pair in the node, container, and service metrics have been calculated. "
+    "For KPIs where high values indicate faults, the 95th percentile was used as the threshold. For KPIs where low values "
+    "indicate faults, such as success rate, the 5th percentile was used. The resulting summary table lists each component ID, "
+    "KPI name, the calculated threshold value, and the threshold type ('high' or 'low'). This provides a comprehensive reference "
+    "for detecting anomalies based on KPI deviations across all components."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+component_id             kpi_name    threshold threshold_type
+0          os_001           Agent_ping     1.000000           high
+1          os_001         Buffers_used     0.894848           high
+2          os_001         CPU_idle_pct    98.324587           high
+3          os_001      CPU_iowait_time     0.003476           high
+4          os_001      CPU_system_time     0.794868           high
+...           ...                  ...          ...            ...
+1766       db_013       Total_Tbs_Size  4094.000000           high
+1767       db_013          UndoTbs_Pct     0.010000           high
+1768       db_013        Used_Tbs_Size  2527.220000           high
+1769       db_013          User_Commit     0.000000           high
+1770       db_013  tnsping_result_time    35.000000           high
+
+[1771 rows x 4 columns]
+
+**Note**: The printed pandas DataFrame is truncated. Only **10 rows** are displayed. Use `df.head(X)` to display more rows.
+------------------------------------------------------------
+
+
+============================================================
+Step 3
+============================================================
+🤖 Agent Response:
+   ```
+execute("Filter the node, container, and service metric data to include only data points within the failure time range from May 23, 2020, 00:00 to 00:30 (UTC+8). For each component-KPI pair, aggregate the filtered time series data and prepare it for anomaly detection by aligning timestamps and values. Return the filtered and aggregated data for further analysis.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "The node, container, and service metric data have been successfully filtered to include only data points within the failure "
+    "time range from May 23, 2020, 00:00 to 00:30 (UTC+8). For each component-KPI pair, the time series data with aligned timestamps "
+    "and values have been aggregated. This filtered and aggregated dataset is now ready for further anomaly detection analysis."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+(      component_id    kpi_name                  datetime  value
+0           os_001  Agent_ping 2020-05-23 00:00:17+08:00    1.0
+1           os_001  Agent_ping 2020-05-23 00:01:17+08:00    1.0
+2           os_001  Agent_ping 2020-05-23 00:02:17+08:00    1.0
+3           os_001  Agent_ping 2020-05-23 00:03:17+08:00    1.0
+4           os_001  Agent_ping 2020-05-23 00:04:17+08:00    1.0
+...            ...         ...                       ...    ...
+24993       os_022    ss_total 2020-05-23 00:25:38+08:00  479.0
+24994       os_022    ss_total 2020-05-23 00:26:39+08:00  457.0
+24995       os_022    ss_total 2020-05-23 00:27:38+08:00  457.0
+24996       os_022    ss_total 2020-05-23 00:28:38+08:00  457.0
+24997       os_022    ss_total 2020-05-23 00:29:38+08:00  511.0
+
+[24998 rows x 4 columns],      component_id                   kpi_name                  datetime  value
+0      docker_001         container_cpu_used 2020-05-23 00:00:14+08:00    1.0
+1      docker_001         container_cpu_used 2020-05-23 00:01:12+08:00    2.0
+2      docker_001         container_cpu_used 2020-05-23 00:02:17+08:00   55.0
+3      docker_001         container_cpu_used 2020-05-23 00:03:01+08:00    2.0
+4      docker_001         container_cpu_used 2020-05-23 00:04:15+08:00    2.0
+...           ...                        ...                       ...    ...
+2092   docker_008  container_thread_used_pct 2020-05-23 00:25:10+08:00    0.0
+2093   docker_008  container_thread_used_pct 2020-05-23 ...
+   [Response truncated - 3309 total chars]
+------------------------------------------------------------
+
+
+============================================================
+Step 4
+============================================================
+🤖 Agent Response:
+   ```
+execute("Perform anomaly detection on the filtered metric data within the failure time window. For each component-KPI pair, identify data points where the KPI value exceeds the global threshold if the threshold type is 'high', or falls below the global threshold if the threshold type is 'low'. Return a list of anomalies with component ID, KPI name, timestamp, value, threshold, and threshold type.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "Anomaly detection within the failure time window identified 1643 data points across node, container, and service metrics where KPI values "
+    "exceeded their global thresholds. For KPIs with 'high' threshold types, anomalies were detected when values were above the 95th percentile threshold, "
+    "and for 'low' threshold types, when values fell below the 5th percentile threshold. The anomalies include various KPIs such as CPU idle percentage, "
+    "CPU iowait time, system CPU time, session percentage, TPS per second, user commit, and tnsping result time, among others. This detailed list "
+    "provides a basis for further root cause analysis."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+component_id             kpi_name                  datetime      value  threshold threshold_type
+0          os_001         CPU_idle_pct 2020-05-23 00:07:09+08:00  98.392547  98.324587           high
+1          os_001         CPU_idle_pct 2020-05-23 00:10:09+08:00  98.344937  98.324587           high
+2          os_001      CPU_iowait_time 2020-05-23 00:02:07+08:00   0.015291   0.003476           high
+3          os_001      CPU_iowait_time 2020-05-23 00:09:08+08:00   0.004168   0.003476           high
+4          os_001      CPU_system_time 2020-05-23 00:17:03+08:00   0.800245   0.794868           high
+...           ...                  ...                       ...        ...        ...            ...
+1638       db_013          Session_pct 2020-05-23 00:28:26+08:00   0.021000   0.019000           high
+1639       db_013          TPS_Per_Sec 2020-05-23 00:01:26+08:00   2.000000   1.400000           high
+1640       db_013          User_Commit 2020-05-23 00:01:26+08:00   0.190000   0.000000           high
+1641       db_013  tnsping_result_time 2020-05-23 00:00:13+08:00  50.000000  35.000000           high
+1642       db_013  tnsping_result_time 2020-05-23 00:20:13+08:00  60.000000  35.000000       ...
+   [Response truncated - 2158 total chars]
+------------------------------------------------------------
+
+
+============================================================
+Step 5
+============================================================
+🤖 Agent Response:
+   ```
+execute("Group the detected anomalies by component ID and KPI name, then identify consecutive time intervals where anomalies persist to form fault sub-series. For each fault sub-series, calculate the maximum (or minimum) KPI value and compare it to the global threshold to determine if the fault is significant (threshold breach > 50% of the extremal value). Filter out faults that are likely false positives caused by random KPI fluctuations. Return a list of identified faults with component ID, KPI name, fault start time, fault end time, maximum/minimum value, and threshold breach percentage.")
+```
+
+📋 Observation:
+   ```python
+summary = (
+    "The detected anomalies were grouped into fault sub-series based on consecutive anomaly timestamps for each component-KPI pair. "
+    "For each fault sub-series, the maximum or minimum KPI value was calculated and compared to the global threshold. Faults with a threshold "
+    "breach greater than 50% of the extremal value were identified as significant, filtering out likely false positives caused by random fluctuations. "
+    "A total of 117 significant faults were identified, each with details including component ID, KPI name, fault start and end times, extremal KPI value, "
+    "and the percentage by which the threshold was breached."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+component_id               kpi_name          fault_start_time            fault_end_time  extremal_value  threshold_breach_pct
+0         db_001    LFParaWrite_Per_Sec 2020-05-23 00:25:26+08:00 2020-05-23 00:25:26+08:00      152.100000             63.790270
+1         db_001         LFSync_Per_Sec 2020-05-23 00:13:26+08:00 2020-05-23 00:13:26+08:00      181.290000             98.557560
+2         db_002                   AIOS 2020-05-23 00:28:26+08:00 2020-05-23 00:28:26+08:00        0.010000            100.000000
+3         db_002  Physical_Read_Per_Sec 2020-05-23 00:28:25+08:00 2020-05-23 00:28:25+08:00       16.900000             98.816568
+4         db_003    DFParaWrite_Per_Sec 2020-05-23 00:25:25+08:00 2020-05-23 00:27:25+08:00       68.220000             52.257403
+..           ...                    ...                       ...                       ...             ...                   ...
+112       os_021           CPU_util_pct 2020-05-23 00:00:43+08:00 2020-05-23 00:00:43+08:00       14.823504             60.007841
+113       os_021             Disk_await 2020-05-23 00:01:34+08:00 2020-05-23 00:01:34+08:00        1.710000             73.391813
+114       os_021             Disk_svctm 2020-05-23 00:2...
+   [Response truncated - 2483 total chars]
+------------------------------------------------------------
+
+Agent_ping 2020-05-23 00:01:17+08:00    1.0
+2           os_001  Agent_ping 2020-05-23 00:02:17+08:00    1.0
+3           os_001  Agent_ping 2020-05-23 00:03:17+08:00    1.0
+4           os_001  Agent_ping 2020-05-23 00:04:17+08:00    1.0
+...            ...         ...                       ...    ...
+24993       os_022    ss_total 2020-05-23 00:25:38+08:00  479.0
+24994       os_022    ss_total 2020-05-23 00:26:39+08:00  457.0
+24995       os_022    ss_total 2020-05-23 00:27:38+08:00  457.0
+24996       os_022    ss_total 2020-05-23 00:28:38+08:00  457.0
+24997       os_022    ss_total 2020-05-23 00:29:38+08:00  511.0
+
+[24998 rows x 4 columns],      component_id                   kpi_name                  datetime  value
+0      docker_001         container_cpu_used 2020-05-23 00:00:14+08:00    1.0
+1      docker_001         container_cpu_used 2020-05-23 00:01:12+08:00    2.0
+2      docker_001         container_cpu_used 2020-05-23 00:02:17+08:00   55.0
+3      docker_001         container_cpu_used 2020-05-23 00:03:01+08:00    2.0
+4      docker_001         container_cpu_used 2020-05-23 00:04:15+08:00    2.0
+...           ...                        ...                       ...    ...
+2092   docker_008  container_thread_used_pct 2020-05-23 00:25:10+08:00    0.0
+2093   docker_008  container_thread_used_pct 2020-05-23 00:26:11+08:00    0.0
+2094   docker_008  container_thread_used_pct 2020-05-23 00:27:10+08:00    0.0
+2095   docker_008  container_thread_used_pct 2020-05-23 00:28:09+08:00    0.0
+2096   docker_008  container_thread_used_pct 2020-05-23 00:29:10+08:00    0.0
+
+[2097 rows x 4 columns],       component_id             kpi_name                  datetime  value
+0           db_001                  ACS 2020-05-23 00:00:27+08:00   0.01
+1           db_001                  ACS 2020-05-23 00:01:27+08:00   0.01
+2           db_001                  ACS 2020-05-23 00:02:27+08:00   0.02
+3           db_001                  ACS 2020-05-23 00:03:27+08:00   0.02
+4           db_001                  ACS 2020-05-23 00:04:27+08:00   0.01
+...            ...                  ...                       ...    ...
+14287       db_013  tnsping_result_time 2020-05-23 00:25:13+08:00  20.00
+14288       db_013  tnsping_result_time 2020-05-23 00:26:13+08:00  20.00
+14289       db_013  tnsping_result_time 2020-05-23 00:27:13+08:00  20.00
+14290       db_013  tnsping_result_time 2020-05-23 00:28:13+08:00  20.00
+14291       db_013  tnsping_result_time 2020-05-23 00:29:13+08:00  10.00
+
+[14292 rows x 4 columns])
+
+**Note**: The printed pandas DataFrame is truncated. Only **10 rows** are displayed. Use `df.head(X)` to display more rows.
+--------------------------------------------------------------------------------
+2026-02-23 13:22:27,465 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:22:27,465 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:22:28,475 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:22:28,476 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:22:31,818 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:22:31,818 [openrca_rca] INFO: --------------------------------------------------------------------------------
+### Controller Step[4]
+Analysis: The metric data for nodes, containers, and services has been filtered to the failure time window and aggregated by component-KPI pairs. This prepares the data for anomaly detection by comparing each KPI value against its global threshold. The next step is to perform anomaly detection by identifying data points that exceed the global thresholds (for high-value faults) or fall below the thresholds (for low-value faults such as success rate). This will help to locate potential faults in specific components and KPIs during the failure period.
+Instruction: Perform anomaly detection on the filtered metric data within the failure time window. For each component-KPI pair, identify data points where the KPI value exceeds the global threshold if the threshold type is 'high', or falls below the global threshold if the threshold type is 'low'. Return a list of anomalies with component ID, KPI name, timestamp, value, threshold, and threshold type.
+Completed: False
+--------------------------------------------------------------------------------
+2026-02-23 13:22:34,973 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:22:34,973 [openrca_rca] INFO: [EXECUTOR DEBUG] attempt=0, code_len=1371
+2026-02-23 13:22:35,170 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:22:35,171 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:22:38,585 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:22:38,585 [openrca_rca] INFO: --------------------------------------------------------------------------------
+Step[4] Observation:
+```python
+summary = (
+    "Anomaly detection within the failure time window identified 1643 data points across node, container, and service metrics where KPI values "
+    "exceeded their global thresholds. For KPIs with 'high' threshold types, anomalies were detected when values were above the 95th percentile threshold, "
+    "and for 'low' threshold types, when values fell below the 5th percentile threshold. The anomalies include various KPIs such as CPU idle percentage, "
+    "CPU iowait time, system CPU time, session percentage, TPS per second, user commit, and tnsping result time, among others. This detailed list "
+    "provides a basis for further root cause analysis."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+component_id             kpi_name                  datetime      value  threshold threshold_type
+0          os_001         CPU_idle_pct 2020-05-23 00:07:09+08:00  98.392547  98.324587           high
+1          os_001         CPU_idle_pct 2020-05-23 00:10:09+08:00  98.344937  98.324587           high
+2          os_001      CPU_iowait_time 2020-05-23 00:02:07+08:00   0.015291   0.003476           high
+3          os_001      CPU_iowait_time 2020-05-23 00:09:08+08:00   0.004168   0.003476           high
+4          os_001      CPU_system_time 2020-05-23 00:17:03+08:00   0.800245   0.794868           high
+...           ...                  ...                       ...        ...        ...            ...
+1638       db_013          Session_pct 2020-05-23 00:28:26+08:00   0.021000   0.019000           high
+1639       db_013          TPS_Per_Sec 2020-05-23 00:01:26+08:00   2.000000   1.400000           high
+1640       db_013          User_Commit 2020-05-23 00:01:26+08:00   0.190000   0.000000           high
+1641       db_013  tnsping_result_time 2020-05-23 00:00:13+08:00  50.000000  35.000000           high
+1642       db_013  tnsping_result_time 2020-05-23 00:20:13+08:00  60.000000  35.000000           high
+
+[1643 rows x 6 columns]
+
+**Note**: The printed pandas DataFrame is truncated. Only **10 rows** are displayed. Use `df.head(X)` to display more rows.
+--------------------------------------------------------------------------------
+2026-02-23 13:22:38,661 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:22:38,661 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:22:39,675 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:22:39,675 [openai._base_client] INFO: Retrying request to /chat/completions in 32.000000 seconds
+2026-02-23 13:23:14,524 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:23:14,524 [openrca_rca] INFO: --------------------------------------------------------------------------------
+### Controller Step[5]
+Analysis: The anomaly detection step identified 1643 data points across node, container, and service metrics where KPI values exceeded their global thresholds within the failure time window. This indicates multiple potential faults across various components and KPIs. The next step is fault identification, which involves grouping these anomalies into consecutive sub-series (faults) for each component-KPI pair. This will help to filter out isolated noise spikes and identify meaningful faults by checking if the maximum or minimum value in the fault sub-series significantly exceeds the threshold (e.g., by more than 50%). This step is crucial to narrow down the components and KPIs that truly experienced faults during the failure period.
+Instruction: Group the detected anomalies by component ID and KPI name, then identify consecutive time intervals where anomalies persist to form fault sub-series. For each fault sub-series, calculate the maximum (or minimum) KPI value and compare it to the global threshold to determine if the fault is significant (threshold breach > 50% of the extremal value). Filter out faults that are likely false positives caused by random KPI fluctuations. Return a list of identified faults with component ID, KPI name, fault start time, fault end time, maximum/minimum value, and threshold breach percentage.
+Completed: False
+--------------------------------------------------------------------------------
+2026-02-23 13:23:14,604 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:23:14,604 [openai._base_client] INFO: Retrying request to /chat/completions in 12.000000 seconds
+2026-02-23 13:23:26,667 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:23:26,667 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:23:33,311 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:23:33,311 [openrca_rca] INFO: [EXECUTOR DEBUG] attempt=0, code_len=3250
+2026-02-23 13:23:35,534 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+2026-02-23 13:23:35,535 [openrca_rca] INFO: --------------------------------------------------------------------------------
+Step[5] Observation:
+```python
+summary = (
+    "The detected anomalies were grouped into fault sub-series based on consecutive anomaly timestamps for each component-KPI pair. "
+    "For each fault sub-series, the maximum or minimum KPI value was calculated and compared to the global threshold. Faults with a threshold "
+    "breach greater than 50% of the extremal value were identified as significant, filtering out likely false positives caused by random fluctuations. "
+    "A total of 117 significant faults were identified, each with details including component ID, KPI name, fault start and end times, extremal KPI value, "
+    "and the percentage by which the threshold was breached."
+)
+summary
+```
+
+The original code execution output of IPython Kernel is also provided below for reference:
+
+component_id               kpi_name          fault_start_time            fault_end_time  extremal_value  threshold_breach_pct
+0         db_001    LFParaWrite_Per_Sec 2020-05-23 00:25:26+08:00 2020-05-23 00:25:26+08:00      152.100000             63.790270
+1         db_001         LFSync_Per_Sec 2020-05-23 00:13:26+08:00 2020-05-23 00:13:26+08:00      181.290000             98.557560
+2         db_002                   AIOS 2020-05-23 00:28:26+08:00 2020-05-23 00:28:26+08:00        0.010000            100.000000
+3         db_002  Physical_Read_Per_Sec 2020-05-23 00:28:25+08:00 2020-05-23 00:28:25+08:00       16.900000             98.816568
+4         db_003    DFParaWrite_Per_Sec 2020-05-23 00:25:25+08:00 2020-05-23 00:27:25+08:00       68.220000             52.257403
+..           ...                    ...                       ...                       ...             ...                   ...
+112       os_021           CPU_util_pct 2020-05-23 00:00:43+08:00 2020-05-23 00:00:43+08:00       14.823504             60.007841
+113       os_021             Disk_await 2020-05-23 00:01:34+08:00 2020-05-23 00:01:34+08:00        1.710000             73.391813
+114       os_021             Disk_svctm 2020-05-23 00:27:30+08:00 2020-05-23 00:27:30+08:00        3.330000             54.654655
+115       os_022            Disk_rd_kbs 2020-05-23 00:00:23+08:00 2020-05-23 00:00:23+08:00        0.000196            100.000000
+116       os_022                Page_pi 2020-05-23 00:00:46+08:00 2020-05-23 00:00:46+08:00        0.198961            100.000000
+
+[117 rows x 6 columns]
+
+**Note**: The printed pandas DataFrame is truncated. Only **10 rows** are displayed. Use `df.head(X)` to display more rows.
+--------------------------------------------------------------------------------
+2026-02-23 13:23:35,616 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:23:35,616 [openai._base_client] INFO: Retrying request to /chat/completions in 1.000000 seconds
+2026-02-23 13:23:36,629 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:23:36,629 [openai._base_client] INFO: Retrying request to /chat/completions in 3.000000 seconds
+2026-02-23 13:23:39,642 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:23:39,643 [openrca_rca] WARNING: Rate limited (attempt 1), retrying in 1s
+2026-02-23 13:23:40,752 [httpx] INFO: HTTP Request: POST https://wk-r0.openai.azure.com/openai/v1/chat/completions "HTTP/1.1 429 Too Many Requests"
+2026-02-23 13:23:40,752 [openai._base_client] INFO: Retrying request to /chat/completions in 31.000000 seconds
+2026-02-23 13:26:18,418 [openai._base_client] INFO: Retrying request to /chat/completions in 0.772736 seconds
