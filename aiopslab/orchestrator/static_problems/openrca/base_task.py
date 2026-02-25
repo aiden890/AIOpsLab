@@ -4,10 +4,9 @@ Provides common logic: app creation, query loading, no-op workload/fault.
 """
 
 import pandas as pd
-from pathlib import Path
 
 from aiopslab.service.apps.static_dataset import StaticDataset
-from aiopslab.orchestrator.static_actions.rca_executor import StaticRCAActionsWithExecutor
+from aiopslab.orchestrator.static_actions.rca import StaticRCAActions
 
 
 class OpenRCABaseTask:
@@ -46,10 +45,11 @@ class OpenRCABaseTask:
 
         self.task_type = self.query_row["task_index"]
 
-        # Set up actions that read from the Docker container.
-        # setup_executor() is called by the runner after deployment.
+        # Default: callback-based actions (set_executor() injection).
+        # Runners that need the self-contained executor (e.g. run_react_rca.py)
+        # swap this out for StaticRCAActionsWithExecutor after deployment.
         executor_cfg = self.app.dataset_config.get("executor", {})
-        self._actions = StaticRCAActionsWithExecutor(
+        self._actions = StaticRCAActions(
             container_name=self.app.get_container_name(),
             possible_root_causes=self.app.dataset_config.get("possible_root_causes"),
             telemetry_flags=self.app.dataset_config.get("telemetry"),
