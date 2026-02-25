@@ -76,9 +76,9 @@ guidance = """\
 ## BANK-SPECIFIC RCA GUIDANCE:
 
 **Component types and fault propagation direction:**
-- `apache*` — load balancer / entry point. Network faults (packet loss, latency) originate HERE and propagate downstream.
-- `Mysql*`, `Redis*` — database / cache. Memory or connection faults originate HERE and propagate UPWARD to callers (Tomcat, IG, MG show JVM heap pressure as a downstream effect).
-- `Tomcat*`, `IG*`, `MG*` — application services. JVM anomalies are OFTEN SYMPTOMS of an upstream network fault or downstream database fault, not the root cause.
+- `apache*` — load balancer / entry point.
+- `Mysql*`, `Redis*` — database / cache.
+- `Tomcat*`, `IG*`, `MG*` — application services.
 
 **KPI signal → reason mapping (use this table to select the exact reason string):**
 | KPI pattern | Direction | Reason to use |
@@ -92,43 +92,25 @@ guidance = """\
 | `JVMCpuLoad` | above P90 | `"high JVM CPU load"` |
 | logs show `java.lang.OutOfMemoryError` or heap > 95% | — | `"JVM Out of Memory (OOM) Heap"` |
 
-**CRITICAL — resolve packet loss vs latency before saving hypothesis:**
-- `get_trace_call_graph()` returning `network_gap` signal tells you a network fault exists, but NOT which type.
-- Always resolve by checking the KPI direction for that component:
-  - Run `get_component_kpi_deviation(namespace, component)` and look for NET* KPIs
-  - NET* **drop below P10** → `"network packet loss"`
-  - NET* **spike above P90** → `"network latency"`
-- Never choose between packet loss and latency based on trace evidence alone.
-
-**Apache and entry-point faults — how to identify:**
-- `apache*` is the entry point of the call chain. A network fault at apache (e.g., packet loss on apache02) shows up as:
-  - `get_kpi_low_deviation()`: NET* KPI drop **on apache02** itself ← PRIMARY signal
-  - In traces: large elapsed time on components that CALL apache (Tomcat/IG/MG see the slow round-trip to apache); the trace call graph may rank Tomcat/IG as best candidates — but they are VICTIMS
-- **Rule**: If `get_kpi_low_deviation()` shows NET* drop on apache01/02, apache IS the root cause — override any trace call graph suggestion.
-
-**Database and cache faults (Redis*, Mysql*) — how to identify:**
-- Redis/Mysql are LEAF nodes in the call chain — they do not call other services.
-- Their faults show ONLY via KPI metrics. Trace callee signal for these components is always 0.
-- To check: call `get_component_kpi_deviation(namespace, "Redis02")` and look for:
-  - `used_memory` above P90 → `"high memory usage"` at that DB component
-  - Do NOT skip database components just because the trace call graph does not rank them
-- Database memory faults are often INDEPENDENT of network faults. Both can coexist:
-  - Network fault on Tomcat/apache → service degradation
-  - Redis memory spike → background cache pressure (may or may not be the root cause)
-  - Distinguish by checking whether the DB anomaly coincides with the service fault window
-
-**When scanning `get_kpi_high_deviation()` or `get_kpi_low_deviation()` results:**
-- Always look for any row where `kpi` contains `NET` (e.g., `NETPackets*`, `NETKBTotal*`, `NETKBTotalPerSec`). These are the DIRECT network fault signals.
-- Do not let JVM memory rows (which dominate the top of the list) distract you from NET* rows lower down — even a small NET* deviation is more diagnostically meaningful than a large JVM heap deviation.
-- Use `execute()` with pandas to read the full deviation data and find NET* rows plus the exact `peak_high_ts` / `peak_low_ts`.
-- **When multiple components appear in NET* rows, call `get_component_kpi_deviation()` for EACH of them** and compare their fault timestamps. The component with the **earliest** `peak_low_ts` or `peak_high_ts` is the root cause origin — faults propagate from origin to victims, so victims always show anomalies AFTER the root cause. Do not rely solely on the trace call graph to pick which NET* component to investigate.
-- **Do NOT skip a component just because the trace call graph ranked a different one higher.** If Tomcat02 and Tomcat03 both show NET* drops, check both with `get_component_kpi_deviation()` before deciding.
-
 **Victim vs root cause — the critical distinction:**
 - If multiple components show anomalies, the root cause is the component whose anomaly **cannot be explained by what it calls**. Ask: "Is this component's anomaly caused by its own resource exhaustion, or by excessive calls/retries from its callers?"
 - Apache CPU spike → caused by too many retries from clients = VICTIM. Apache NETPackets drop → actual packet loss = ROOT CAUSE.
 - Mysql high Innodb writes → caused by retrying callers = VICTIM. Mysql high `used_memory` → actual memory fault = ROOT CAUSE.
 - Tomcat JVM heap spike → caused by connection backlog to slow database = VICTIM. Tomcat `NETKBTotal` drop → actual network fault = ROOT CAUSE.
+
+**JVM Out of Memory (OOM) — how to identify:**
+- **KEY SIGNAL — heap oscillation**: When `get_kpi_high_deviation()` AND `get_kpi_low_deviation()` **both flag the same JVM memory KPI** (`HeapMemoryUsed` or `JVMUsedMemory`) for the same component, the heap is cycling between exhausted (after GC frees it, value drops below P10) and full again (before next GC, value rises above P90). This is the definitive JVM OOM pattern.
+- When you see this pattern, **immediately search logs**: `search_logs(namespace, keyword="OutOfMemoryError")` — search by keyword, NOT by component name.
+- **CRITICAL — trace `network_gap` is caused by GC pauses, not network**: During a JVM OOM event, Stop-The-World GC pauses freeze all threads. This makes parent span duration >> sum(child span durations), which the trace analysis reports as a `network_gap` signal. **Do NOT interpret trace `network_gap` as network packet loss when JVM heap oscillation is the dominant anomaly** — they produce identical trace signals but completely different root causes.
+
+**CPU exhaustion also causes trace `network_gap` — do NOT confuse with network faults:**
+- When a component's `CPUCpuUtil` spikes significantly above P90, its threads are saturated. Slow thread processing creates parent-span duration >> sum(child-span durations), which appears as `network_gap` in trace analysis — but it is CPU starvation, not network delay.
+- **Rule**: If `CPUCpuUtil` is significantly above P90 for a component AND the trace shows `network_gap` → reason = `"high CPU usage"`, NOT network packet loss or latency.
+- `CPUCpuUtil` deviation takes strict priority over trace `network_gap` signal when both appear together.
+
+**`NETPacketsIn` / `NETPacketsOut` HIGH deviation is often a false signal:**
+- These are **cumulative counters** that grow monotonically all day. Their P90 threshold is the 90th percentile of cumulative daily values — slightly exceeding it happens naturally and does NOT indicate network latency.
+- Do NOT use `NETPacketsIn/Out` HIGH deviation alone to conclude `"network latency"`. Use `NETKBTotalPerSec` (a rate KPI) instead — that is the reliable network throughput signal.
 
 **JVM memory vs real memory fault:**
 - High `JVMFreeMemory` = GC just ran and freed memory — this is NORMAL behavior, not a fault signal.
