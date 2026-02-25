@@ -25,13 +25,16 @@ import pandas as pd
 class StaticDataset(Application):
     """Application class for static dataset deployments."""
 
-    def __init__(self, dataset_config_name: str, query_index: int = None):
+    def __init__(self, dataset_config_name: str, query_index: int = None,
+                 condition: str = None):
         """
         Args:
             dataset_config_name: Name of config file without .json extension
                                 (e.g., "openrca_bank", "alibaba_cluster")
             query_index: Optional row index in query.csv. When provided,
                          sets up time mapping for that specific query.
+            condition: Telemetry ablation condition (e.g., "no_log").
+                       Appended to namespace to create unique containers per condition.
         """
         super().__init__(str(STATIC_DATASET_METADATA))
 
@@ -46,6 +49,19 @@ class StaticDataset(Application):
         # Load base metadata first, then override namespace from dataset config
         self.load_app_json()
         self.namespace = self.dataset_config["namespace"]
+
+        # Append condition suffix for parallel execution isolation
+        self.condition = condition
+        if condition and condition != "all":
+            self.namespace = f"{self.namespace}-{condition.replace('_', '-')}"
+            # Override telemetry flags based on ablation condition
+            CONDITION_FLAGS = {
+                "no_log":    {"enable_log": False, "enable_metric": True,  "enable_trace": True},
+                "no_metric": {"enable_log": True,  "enable_metric": False, "enable_trace": True},
+                "no_trace":  {"enable_log": True,  "enable_metric": True,  "enable_trace": False},
+            }
+            if condition in CONDITION_FLAGS:
+                self.dataset_config["telemetry"] = CONDITION_FLAGS[condition]
 
         # Docker client
         self.docker = Docker()
@@ -182,8 +198,11 @@ class StaticDataset(Application):
         env = self._get_docker_env()
 
         # Clean up previous container, then build and start (detached)
-        self.docker.compose_down(cwd=str(self.docker_deploy_path), env=env)
-        self.docker.compose_up(cwd=str(self.docker_deploy_path), env=env, build=True)
+        # Use namespace as project name so parallel conditions don't conflict
+        self.docker.compose_down(cwd=str(self.docker_deploy_path), env=env,
+                                 project_name=self.namespace)
+        self.docker.compose_up(cwd=str(self.docker_deploy_path), env=env, build=True,
+                               project_name=self.namespace)
 
         container = self.get_container_name()
 
@@ -223,7 +242,8 @@ class StaticDataset(Application):
         """Stop Docker containers."""
         try:
             self.docker.compose_down(
-                cwd=str(self.docker_deploy_path), env=self._get_docker_env()
+                cwd=str(self.docker_deploy_path), env=self._get_docker_env(),
+                project_name=self.namespace,
             )
         except Exception:
             pass
@@ -233,7 +253,8 @@ class StaticDataset(Application):
         """Stop containers and clean up."""
         try:
             self.docker.compose_down(
-                cwd=str(self.docker_deploy_path), env=self._get_docker_env()
+                cwd=str(self.docker_deploy_path), env=self._get_docker_env(),
+                project_name=self.namespace,
             )
             self.docker.cleanup()
         except Exception:

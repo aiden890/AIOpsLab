@@ -22,18 +22,26 @@ rule = """## RULES OF PYTHON CODE WRITING:
 A pre-injected `telemetry` object is available in the IPython Kernel.
 Use it to fetch raw telemetry data from the environment:
 
-    logs_dir = telemetry.get_logs()                 # all logs
-    logs_dir = telemetry.get_logs("service_name")   # specific service
-    metrics_dir = telemetry.get_metrics()
-    traces_dir = telemetry.get_traces()
+    logs_path = telemetry.get_logs()                 # all logs
+    logs_path = telemetry.get_logs("service_name")   # specific service
+    metrics_path = telemetry.get_metrics()
+    traces_path = telemetry.get_traces()
 
-Each call returns a directory path. Read the CSV files from there:
+Each call returns a **file path** (str) or **None** if no data is available.
+Always check for None before reading:
 
     import pandas as pd
-    log_df = pd.read_csv(f"{logs_dir}/logs.csv")
-    metric_df = pd.read_csv(f"{metrics_dir}/metrics.csv")
-    trace_df = pd.read_csv(f"{traces_dir}/traces.csv")
+    logs_path = telemetry.get_logs()
+    log_df = pd.read_csv(logs_path) if logs_path else pd.DataFrame()
 
+    metrics_path = telemetry.get_metrics()
+    metric_df = pd.read_csv(metrics_path) if metrics_path else pd.DataFrame()
+
+    traces_path = telemetry.get_traces()
+    trace_df = pd.read_csv(traces_path) if traces_path else pd.DataFrame()
+
+IMPORTANT: Do NOT append filenames to the path. The returned value is already the full CSV file path.
+IMPORTANT: Always check if the return value is None before calling pd.read_csv().
 Note: Call telemetry.get_*() only once per data type, then reuse the cached DataFrame variable."""
 
 

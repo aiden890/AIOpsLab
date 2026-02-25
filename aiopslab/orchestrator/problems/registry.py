@@ -223,7 +223,8 @@ class ProblemRegistry:
             "flower_model_misconfig-detection",
         ]
 
-    def get_problem_instance(self, problem_id: str):
+    def get_problem_instance(self, problem_id: str, work_dir: str = None,
+                             condition: str = None):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
 

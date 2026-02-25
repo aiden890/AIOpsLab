@@ -60,72 +60,136 @@ cand = """## POSSIBLE ROOT CAUSE REASONS:
 - db_012
 - db_013"""
 
-schema = f"""## TELEMETRY DATA ACCESS:
+# ---------------------------------------------------------------------------
+# Schema sections (assembled by build_schema)
+# ---------------------------------------------------------------------------
 
-- Use `telemetry.get_metrics()`, `telemetry.get_traces()` to fetch data.
-- Each returns the **full file path** to a CSV. Read it directly:
-  `metric_path = telemetry.get_metrics(); df = pd.read_csv(metric_path)`
-
-## DATA SCHEMA
-
-1.  **Metric columns** (in metrics.csv):
+_METRIC_SCHEMA = """\
+**Metric columns** (in metrics.csv):
 
     - App metrics:
         ```csv
         serviceName,startTime,avg_time,num,succee_num,succee_rate
-        osb_001,1586534400000,0.333,1,1,1.0
+        osb_001,1586534400.0,0.333,1,1,1.0
         ```
 
     - Container metrics:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
-        999999996381330,container_mem_used,ZJ-004-060,1586534423000,59.000000,docker_008
+        999999996381330,container_mem_used,ZJ-004-060,1586534423.0,59.000000,docker_008
         ```
 
     - Middleware metrics:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
-        999999996508323,connected_clients,ZJ-005-024,1586534672000,25,redis_003
+        999999996508323,connected_clients,ZJ-005-024,1586534672.0,25,redis_003
         ```
 
     - Node metrics:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
-        999999996487783,CPU_iowait_time,ZJ-001-010,1586534683000,0.022954,os_017
+        999999996487783,CPU_iowait_time,ZJ-001-010,1586534683.0,0.022954,os_017
         ```
 
     - Service metrics:
         ```csv
         itemid,name,bomc_id,timestamp,value,cmdb_id
-        999999998650974,MEM_Total,ZJ-002-055,1586534694000,381.902264,db_003
-        ```
+        999999998650974,MEM_Total,ZJ-002-055,1586534694.0,381.902264,db_003
+        ```"""
 
-2.  **Trace columns** (in traces.csv):
+_TRACE_SCHEMA = """\
+**Trace columns** (in traces.csv):
 
     ```csv
     callType,startTime,elapsedTime,success,traceId,id,pid,cmdb_id,dsName,serviceName
-    JDBC,1586534400335,2.0,True,01df517164d1c0365586,407d617164d1c14f2613,6e02217164d1c14b2607,docker_006,db_003,
-    ```
+    JDBC,1586534400.335,2.0,True,01df517164d1c0365586,407d617164d1c14f2613,6e02217164d1c14b2607,docker_006,db_003,
+    ```"""
 
-{cand}
 
-## CLARIFICATION OF TELEMETRY DATA:
+def build_schema(condition="all"):
+    """Build schema string with telemetry sections filtered by ablation condition.
 
-1. This service system is a telecom database system.
+    Args:
+        condition: "all", "no_log", "no_metric", or "no_trace"
+    """
+    # Telecom dataset has NO log data (only metric + trace)
+    enable_log = False
+    enable_metric = condition != "no_metric"
+    enable_trace = condition != "no_trace"
 
-2. The metrics CSV contains merged data from **multiple metric files** (app, container, node, service, middleware) with different column structures. Non-applicable columns will be NaN. Always filter by `cmdb_id` to get per-component metrics, and by `name` to select the right KPI:
-   - App metrics: columns `serviceName, startTime, avg_time, num, succee_num, succee_rate`
-   - All other metrics: columns `itemid, name, bomc_id, timestamp, value, cmdb_id`
+    # 1. Telemetry access
+    funcs = []
+    if enable_log:
+        funcs.append("`telemetry.get_logs()`")
+    if enable_metric:
+        funcs.append("`telemetry.get_metrics()`")
+    if enable_trace:
+        funcs.append("`telemetry.get_traces()`")
 
-3. In all telemetry files, the timestamp units and cmdb_id formats remain consistent:
+    # Use first available function as example
+    example_func = funcs[0].strip("`") if funcs else "telemetry.get_metrics()"
 
-- Metric: Timestamp units are in **seconds** (e.g., 1586534423).
-- Metric (app): `startTime` is in **seconds**.
-- Trace: Timestamp units are in **seconds** (e.g., 1586534400).
+    sections = []
+    sections.append(
+        f"## TELEMETRY DATA ACCESS:\n\n"
+        f"- Use {', '.join(funcs)} to fetch data.\n"
+        f"- Each returns a file path to a CSV. Read it directly "
+        f"(e.g., `pd.read_csv({example_func})`)."
+    )
 
-4. All issues use **UTC** time. However, the local machine's default timezone is unknown.
+    # 2. Data schema (telecom has no log schema)
+    data_items = []
+    n = 1
+    if enable_metric:
+        data_items.append(f"{n}.  {_METRIC_SCHEMA}")
+        n += 1
+    if enable_trace:
+        data_items.append(f"{n}.  {_TRACE_SCHEMA}")
+        n += 1
+    if data_items:
+        sections.append("## DATA SCHEMA\n\n" + "\n\n".join(data_items))
 
-"""
+    # 3. Candidates
+    sections.append(cand)
+
+    # 4. Clarification
+    cl = []
+    cn = 1
+    cl.append(f"## CLARIFICATION OF TELEMETRY DATA:\n\n"
+              f"{cn}. This service system is a telecom database system.")
+    cn += 1
+
+    if enable_metric:
+        cl.append(
+            f"\n\n{cn}. The `metric_app` data only contains five KPIs: startTime, avg_time, "
+            f"num, succee_num, succee_rate. In contrast, other metrics record a variety of "
+            f"KPIs, such as CPU usage and memory usage. The specific names of these KPIs "
+            f"can be found in the `name` field.")
+        cn += 1
+
+    timestamps = []
+    if enable_metric:
+        timestamps.append("- Metric: Timestamp units are in seconds (e.g., 1586534423.0).")
+    if enable_trace:
+        timestamps.append("- Trace: Timestamp units are in seconds (e.g., 1586534400.335).")
+    if timestamps:
+        cl.append(
+            f"\n\n{cn}. All telemetry timestamps are in **seconds** (Unix epoch). "
+            f"Use `pd.to_datetime(ts, unit='s')` for conversion:\n\n"
+            + "\n".join(timestamps))
+        cn += 1
+
+    cl.append(
+        f"\n\n{cn}. Please use the UTC+8 time zone in all analysis steps "
+        f"since system is deployed in China/Hong Kong/Singapore.")
+
+    sections.append("".join(cl))
+
+    return "\n\n".join(sections)
+
+
+# Default schema (all types) for backward compatibility
+schema = build_schema("all")
 
 guidance = """\
 ## TELECOM-SPECIFIC RCA GUIDANCE:

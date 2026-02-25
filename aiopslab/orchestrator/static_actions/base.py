@@ -35,16 +35,22 @@ class StaticTaskActions:
     inline formatted text — no file write needed.
     """
 
-    def __init__(self, container_name: str = None, base_path: str = None):
+    def __init__(self, container_name: str = None, base_path: str = None,
+                 work_dir: str = None):
         """
         Args:
             container_name: Docker container name (production mode).
             base_path: Local filesystem path (test/fallback mode).
+            work_dir: Directory for saving telemetry CSV files.
+                      Each parallel run should use a unique work_dir to avoid conflicts.
+                      Defaults to cwd if not specified.
         """
         if container_name:
             self.static_app = DockerStaticApp(container_name)
         else:
             self.static_app = StaticApp(base_path or "/agent/telemetry")
+
+        self.work_dir = work_dir or os.getcwd()
 
     # -------------------------------------------------------------------------
     # Discovery / overview actions (no file save — return inline text)
@@ -177,7 +183,7 @@ class StaticTaskActions:
             filter_msg = f" for service '{service}'" if service else ""
             return f"No logs found{filter_msg} in namespace '{namespace}'"
 
-        save_dir = os.path.join(os.getcwd(), "static_logs_output")
+        save_dir = os.path.join(self.work_dir, "static_logs_output")
         os.makedirs(save_dir, exist_ok=True)
         file_path = os.path.join(save_dir, "logs.csv")
         df.to_csv(file_path, index=False)
@@ -191,12 +197,11 @@ class StaticTaskActions:
         if df.empty:
             return f"No metrics found for namespace '{namespace}'"
 
-        save_dir = os.path.join(os.getcwd(), "static_metrics_output")
+        save_dir = os.path.join(self.work_dir, "static_metrics_output")
         os.makedirs(save_dir, exist_ok=True)
         file_path = os.path.join(save_dir, "metrics.csv")
         df.to_csv(file_path, index=False)
 
-        print(f"Metrics data saved to: {file_path}")
         return file_path
 
     @trace_action
@@ -206,12 +211,11 @@ class StaticTaskActions:
         if df.empty:
             return f"No traces found for namespace '{namespace}'"
 
-        save_dir = os.path.join(os.getcwd(), "static_traces_output")
+        save_dir = os.path.join(self.work_dir, "static_traces_output")
         os.makedirs(save_dir, exist_ok=True)
         file_path = os.path.join(save_dir, "traces.csv")
         df.to_csv(file_path, index=False)
 
-        print(f"Trace data saved to: {file_path}")
         return file_path
 
     # -------------------------------------------------------------------------
@@ -298,10 +302,10 @@ class StaticTaskActions:
         """
         Validate that command only accesses allowed telemetry directories.
 
-        Allowed directories:
-        - static_logs_output
-        - static_metrics_output
-        - static_traces_output
+        Allowed directories are relative to self.work_dir:
+        - {work_dir}/static_logs_output
+        - {work_dir}/static_metrics_output
+        - {work_dir}/static_traces_output
 
         Args:
             command: The shell command to validate
@@ -310,15 +314,14 @@ class StaticTaskActions:
             Error message if validation fails, None if valid
         """
         ALLOWED_DIRS = [
-            "static_logs_output",
-            "static_metrics_output",
-            "static_traces_output"
+            os.path.join(self.work_dir, "static_logs_output"),
+            os.path.join(self.work_dir, "static_metrics_output"),
+            os.path.join(self.work_dir, "static_traces_output"),
         ]
 
         # Block dangerous patterns
         DANGEROUS_PATTERNS = [
             (r'\.\./|/\.\./', "Parent directory traversal (..) is not allowed"),
-            (r'~|/Users/|/home/|/root/', "Home directory access is not allowed"),
             (r'/etc/|/var/|/sys/|/proc/', "System directory access is not allowed"),
             (r'\$HOME|\$USER', "Environment variable expansion is not allowed"),
         ]
@@ -327,47 +330,19 @@ class StaticTaskActions:
             if re.search(pattern, command):
                 return f"Error: {error_msg}"
 
-        # Extract potential file paths from command.
-        # Only flag /path that starts at a word boundary (genuine absolute paths),
-        # not slashes inside relative paths like static_traces_output/traces.csv
-        # or awk expressions like sum/NR.
-        absolute_paths = re.findall(r'(?<!\w)/[a-zA-Z0-9_\-/.]+', command)
-        if absolute_paths:
-            return (
-                f"Error: Absolute paths are not allowed.\n"
-                f"Only relative paths within these directories are permitted:\n"
-                f"  - {', '.join(ALLOWED_DIRS)}\n"
-                f"Blocked: {', '.join(absolute_paths)}"
+        # Extract potential file paths from command (absolute and relative)
+        path_candidates = re.findall(r'/?[a-zA-Z0-9_\-/.]+/[a-zA-Z0-9_\-/.]+', command)
+        for path in path_candidates:
+            resolved = os.path.abspath(path)
+            is_allowed = any(
+                resolved == d or resolved.startswith(d + os.sep)
+                for d in ALLOWED_DIRS
             )
-
-        # Extract words that might be paths
-        words = command.split()
-        for word in words:
-            # Skip flags, commands, and empty strings
-            if not word or word.startswith('-'):
-                continue
-
-            # Skip common shell commands
-            if word in ['ls', 'cat', 'grep', 'head', 'tail', 'wc', 'find', 'awk', 'sed', 'cut', 'sort', 'uniq', 'less', 'more', 'echo', 'pwd']:
-                continue
-
-            # Skip quoted strings (likely search patterns or arguments)
-            if word.startswith('"') or word.startswith("'") or word.startswith('|') or word.startswith('>'):
-                continue
-
-            # If word looks like a path (contains / or matches directory names)
-            if '/' in word or any(word.startswith(d) for d in ALLOWED_DIRS):
-                # Check if it's in an allowed directory
-                is_allowed = any(
-                    word == allowed_dir or word.startswith(f"{allowed_dir}/")
-                    for allowed_dir in ALLOWED_DIRS
+            if not is_allowed:
+                return (
+                    f"Error: Access denied to '{path}'.\n"
+                    f"Commands can only access these directories:\n"
+                    f"  - {', '.join(ALLOWED_DIRS)}"
                 )
-
-                if not is_allowed:
-                    return (
-                        f"Error: Access denied to '{word}'.\n"
-                        f"Commands can only access these directories:\n"
-                        f"  - {', '.join(ALLOWED_DIRS)}"
-                    )
 
         return None

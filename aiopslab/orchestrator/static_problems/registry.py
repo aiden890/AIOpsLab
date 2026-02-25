@@ -58,11 +58,12 @@ class StaticProblemRegistry:
                 pid = f"{ds_key}-{task_type}-{idx}"
                 self.PROBLEM_REGISTRY[pid] = (cls, idx)
 
-    def get_problem_instance(self, problem_id: str):
+    def get_problem_instance(self, problem_id: str, work_dir: str = None,
+                             condition: str = None):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID '{problem_id}' not found in static registry.")
         cls, query_index = self.PROBLEM_REGISTRY[problem_id]
-        return cls(query_index=query_index)
+        return cls(query_index=query_index, work_dir=work_dir, condition=condition)
 
     def get_problem_ids(self, task_type: str = None, dataset: str = None):
         ids = list(self.PROBLEM_REGISTRY.keys())

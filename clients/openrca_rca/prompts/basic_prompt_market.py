@@ -82,14 +82,12 @@ cand = """## POSSIBLE ROOT CAUSE COMPONENTS:
 - node disk write I/O consumption
 - node disk space consumption"""
 
-schema = f"""## TELEMETRY DATA ACCESS:
+# ---------------------------------------------------------------------------
+# Schema sections (assembled by build_schema)
+# ---------------------------------------------------------------------------
 
-- Use `telemetry.get_logs()`, `telemetry.get_metrics()`, `telemetry.get_traces()` to fetch data.
-- Each returns a directory path. Read CSVs from there (e.g., `pd.read_csv(f"{{dir}}/metrics.csv")`).
-
-## DATA SCHEMA
-
-1.  **Metric columns** (in metrics.csv):
+_METRIC_SCHEMA = """\
+**Metric columns** (in metrics.csv):
 
     - Container metrics:
         ```csv
@@ -119,16 +117,18 @@ schema = f"""## TELEMETRY DATA ACCESS:
         ```csv
         service,timestamp,rr,sr,mrt,count
         adservice-grpc,1647716400,100.0,100.0,2.429508196728182,61
-        ```
+        ```"""
 
-2.  **Trace columns** (in traces.csv):
+_TRACE_SCHEMA = """\
+**Trace columns** (in traces.csv):
 
     ```csv
     timestamp,cmdb_id,span_id,trace_id,duration,type,status_code,operation_name,parent_span
-    1647705600361,frontend-0,a652d4d10e9478fc,9451fd8fdf746a80687451dae4c4e984,49877,rpc,0,hipstershop.CheckoutService/PlaceOrder,952754a738a11675
-    ```
+    1647705600.361,frontend-0,a652d4d10e9478fc,9451fd8fdf746a80687451dae4c4e984,49877,rpc,0,hipstershop.CheckoutService/PlaceOrder,952754a738a11675
+    ```"""
 
-3.  **Log columns** (in logs.csv):
+_LOG_SCHEMA = """\
+**Log columns** (in logs.csv):
 
     - Proxy logs:
         ```csv
@@ -140,33 +140,127 @@ schema = f"""## TELEMETRY DATA ACCESS:
         ```csv
         log_id,timestamp,cmdb_id,log_name,value
         GIvpon8BDiVcQfZwJ5a9,1647705660,currencyservice-0,log_currencyservice-service_application,...
-        ```
+        ```"""
 
-{cand}
-
-## CLARIFICATION OF TELEMETRY DATA:
-
-1. This microservice system is a E-commerce platform which includes a failover mechanism, with each service deployed across four pods. In this system, a container (pod) can be deployed in different nodes. If the root cause component is a single pod of a specific service (e.g., node-1.adservice-0), the failure may not significantly impact the corresponding service metrics. In contrast, if the root cause component is a service itself (e.g., adservice), which means all pods of this service are faulty, the corresponding service metrics will be significantly impacted. Note that `Pod` equals to `Container` in this system.
-
-2. The service metrics only contain four KPIs: rr, sr, mrt, and count. In contrast, other metric files record a variety of KPIs. The specific names of these KPIs can be found in the `kpi_name` field.
-
-3. Note that the `cmdb_id` is the name of specific components, including nodes, pods, services, etc.
-
+_CMDB_METRIC = """\
 -  Metrics:
     -  Runtime: The application name and port, e.g., `adservice.ts:8088`
     -  Service: The service name and protocol, e.g., `adservice-grpc`
     -  Container: The pod name combined with a node name, e.g., `node-1.adservice-0`
     -  Node: The node name, e.g., `node-1`
-    -  Mesh: The service-to-service connection identifier within the mesh, e.g., `cartservice-1.source.cartservice.redis-cart`
+    -  Mesh: The service-to-service connection identifier within the mesh, e.g., `cartservice-1.source.cartservice.redis-cart`"""
 
--  Traces: The pod name, e.g., `adservice-0`
+_CMDB_TRACE = """-  Traces: The pod name, e.g., `adservice-0`"""
 
--  Logs: The pod name, e.g., `adservice-0`
+_CMDB_LOG = """-  Logs: The pod name, e.g., `adservice-0`"""
 
-4. In different telemetry files, the timestamp units and cmdb_id formats may vary:
 
-- Metric: Timestamp units are in seconds (e.g., 1647781200).
-- Trace: Timestamp units are in milliseconds (e.g., 1647705600361).
-- Log: Timestamp units are in seconds (e.g., 1647705660).
+def build_schema(condition="all"):
+    """Build schema string with telemetry sections filtered by ablation condition.
 
-5. Please use the UTC+8 time zone in all analysis steps since system is deployed in China/Hong Kong/Singapore."""
+    Args:
+        condition: "all", "no_log", "no_metric", or "no_trace"
+    """
+    enable_log = condition != "no_log"
+    enable_metric = condition != "no_metric"
+    enable_trace = condition != "no_trace"
+
+    # 1. Telemetry access
+    funcs = []
+    if enable_log:
+        funcs.append("`telemetry.get_logs()`")
+    if enable_metric:
+        funcs.append("`telemetry.get_metrics()`")
+    if enable_trace:
+        funcs.append("`telemetry.get_traces()`")
+
+    # Use first available function as example
+    example_func = funcs[0].strip("`") if funcs else "telemetry.get_metrics()"
+
+    sections = []
+    sections.append(
+        f"## TELEMETRY DATA ACCESS:\n\n"
+        f"- Use {', '.join(funcs)} to fetch data.\n"
+        f"- Each returns a file path to a CSV. Read it directly "
+        f"(e.g., `pd.read_csv({example_func})`)."
+    )
+
+    # 2. Data schema
+    data_items = []
+    n = 1
+    if enable_metric:
+        data_items.append(f"{n}.  {_METRIC_SCHEMA}")
+        n += 1
+    if enable_trace:
+        data_items.append(f"{n}.  {_TRACE_SCHEMA}")
+        n += 1
+    if enable_log:
+        data_items.append(f"{n}.  {_LOG_SCHEMA}")
+        n += 1
+    if data_items:
+        sections.append("## DATA SCHEMA\n\n" + "\n\n".join(data_items))
+
+    # 3. Candidates
+    sections.append(cand)
+
+    # 4. Clarification
+    cl = []
+    cn = 1
+    cl.append(
+        f"## CLARIFICATION OF TELEMETRY DATA:\n\n"
+        f"{cn}. This microservice system is a E-commerce platform which includes a "
+        f"failover mechanism, with each service deployed across four pods. In this system, "
+        f"a container (pod) can be deployed in different nodes. If the root cause component "
+        f"is a single pod of a specific service (e.g., node-1.adservice-0), the failure may "
+        f"not significantly impact the corresponding service metrics. In contrast, if the "
+        f"root cause component is a service itself (e.g., adservice), which means all pods "
+        f"of this service are faulty, the corresponding service metrics will be significantly "
+        f"impacted. Note that `Pod` equals to `Container` in this system.")
+    cn += 1
+
+    if enable_metric:
+        cl.append(
+            f"\n\n{cn}. The service metrics only contain four KPIs: rr, sr, mrt, and count. "
+            f"In contrast, other metric files record a variety of KPIs. The specific names "
+            f"of these KPIs can be found in the `kpi_name` field.")
+        cn += 1
+
+    # cmdb_id clarification (per-type sub-items)
+    cmdb_items = []
+    if enable_metric:
+        cmdb_items.append(_CMDB_METRIC)
+    if enable_trace:
+        cmdb_items.append(_CMDB_TRACE)
+    if enable_log:
+        cmdb_items.append(_CMDB_LOG)
+    if cmdb_items:
+        cl.append(
+            f"\n\n{cn}. Note that the `cmdb_id` is the name of specific components, "
+            f"including nodes, pods, services, etc.\n\n" + "\n\n".join(cmdb_items))
+        cn += 1
+
+    timestamps = []
+    if enable_metric:
+        timestamps.append("- Metric: Timestamp units are in seconds (e.g., 1647781200).")
+    if enable_trace:
+        timestamps.append("- Trace: Timestamp units are in seconds (e.g., 1647705600.361).")
+    if enable_log:
+        timestamps.append("- Log: Timestamp units are in seconds (e.g., 1647705660).")
+    if timestamps:
+        cl.append(
+            f"\n\n{cn}. All telemetry timestamps are in **seconds** (Unix epoch). "
+            f"Use `pd.to_datetime(ts, unit='s')` for conversion:\n\n"
+            + "\n".join(timestamps))
+        cn += 1
+
+    cl.append(
+        f"\n\n{cn}. Please use the UTC+8 time zone in all analysis steps "
+        f"since system is deployed in China/Hong Kong/Singapore.")
+
+    sections.append("".join(cl))
+
+    return "\n\n".join(sections)
+
+
+# Default schema (all types) for backward compatibility
+schema = build_schema("all")

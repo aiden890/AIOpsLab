@@ -13,13 +13,18 @@ from aiopslab.orchestrator.static_actions.rca_executor import StaticRCAActionsWi
 class OpenRCABaseTask:
     """Base class for all OpenRCA static dataset problems."""
 
-    def __init__(self, config_name: str, query_index: int):
+    def __init__(self, config_name: str, query_index: int, work_dir: str = None,
+                 condition: str = None):
         """
         Args:
             config_name: Dataset config name (e.g., "openrca_bank").
             query_index: Row index in query.csv (0-based).
+            work_dir: Directory for saving telemetry CSV files.
+                      Use unique paths for parallel runs to avoid conflicts.
+            condition: Telemetry ablation condition for container isolation.
         """
-        self.app = StaticDataset(config_name, query_index=query_index)
+        self.app = StaticDataset(config_name, query_index=query_index,
+                                 condition=condition)
         self.namespace = self.app.namespace
         self.query_index = query_index
 
@@ -49,6 +54,7 @@ class OpenRCABaseTask:
             possible_root_causes=self.app.dataset_config.get("possible_root_causes"),
             telemetry_flags=self.app.dataset_config.get("telemetry"),
             use_executor=executor_cfg.get("enable", True),
+            work_dir=work_dir,
         )
 
     def start_workload(self):

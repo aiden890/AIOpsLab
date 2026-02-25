@@ -376,6 +376,14 @@ tests/
 # Aiden
 playground_aiden/
 results/
+!experiments/telemetry_ablation/results/
+!experiments/telemetry_ablation/results/**/*.log
+results_*/
 static_logs_output/
 static_metrics_output/
 static_traces_output/
+*.bak
+experiments/telemetry_ablation2/
+experiments/telemetry_ablation3_results/
+experiments/telemetry_ablation4_results/
+experiments/telemetry_ablation5_results/

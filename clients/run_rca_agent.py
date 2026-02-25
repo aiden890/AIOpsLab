@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import asyncio
+import glob
 import logging
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from aiopslab.orchestrator.static_orchestrator import StaticOrchestrator
 from clients.openrca_rca.agent import OpenRCARCAAgent
-from clients.openrca_rca.prompts.telemetry_guide import TELEMETRY_GUIDE
+from clients.openrca_rca.prompts.telemetry_guide import build_telemetry_guide
 
 # Setup logging
 logging.basicConfig(
@@ -43,6 +44,11 @@ def parse_args():
     parser.add_argument("--max-steps", type=int, default=25, help="Max orchestrator steps")
     parser.add_argument("--results-dir", type=str, default="results/rca_agent")
     parser.add_argument("--api-config", type=str, default=None, help="Path to api_config.yaml")
+    parser.add_argument("--condition", type=str, default="all",
+                        choices=["all", "no_log", "no_metric", "no_trace"],
+                        help="Telemetry ablation condition (default: all)")
+    parser.add_argument("--work-dir", type=str, default=None,
+                        help="Directory for telemetry CSV files (unique per parallel run)")
     return parser.parse_args()
 
 
@@ -79,6 +85,17 @@ if __name__ == "__main__":
     completed = 0
 
     for pid in problem_ids:
+        # Skip if result JSON already exists for this problem_id
+        # pid format: "openrca_bank-task_1-0" → file: "model_task_1-0_*.json"
+        parts = pid.split("-")
+        task_query = f"{parts[1]}-{parts[2]}" if len(parts) >= 3 else pid
+        existing = glob.glob(str(results_dir / "**" / f"model_{task_query}_*.json"),
+                             recursive=True)
+        if existing:
+            logger.info(f"Skipping {pid} (result exists: {Path(existing[0]).name})")
+            completed += 1
+            continue
+
         print(f"\n{'=' * 60}")
         print(f"Problem: {pid}")
         print(f"{'=' * 60}\n")
@@ -89,22 +106,23 @@ if __name__ == "__main__":
         try:
             # 1. Initialize problem (deploy, setup)
             #    Inject RCA-specific telemetry guide before getting task description
-            problem_desc, instructs, apis = orchestrator.init_problem(pid)
+            problem_desc, instructs, apis = orchestrator.init_problem(pid, work_dir=args.work_dir, condition=args.condition)
 
             # Override telemetry guide with RCA agent's version and regenerate
             problem = orchestrator.session.problem
-            problem.telemetry_guide = TELEMETRY_GUIDE
+            dataset_key = extract_dataset_key(pid)
+            problem.telemetry_guide = build_telemetry_guide(args.condition, dataset_key=dataset_key)
             problem_desc = problem.get_task_description()
 
             agent.init_context(problem_desc, instructs, apis)
 
             # 2. Inject Executor callback into the actions object
-            dataset_key = extract_dataset_key(pid)
             agent.set_actions(problem._actions, problem.namespace, dataset_key,
-                              max_steps=args.max_steps)
+                              max_steps=args.max_steps, condition=args.condition)
 
-            # 3. Link executor trajectory to session (populated during loop)
+            # 3. Link executor trajectory and condition to session
             orchestrator.session.extra["executor_trajectory"] = agent.executor_trajectory
+            orchestrator.session.extra["condition"] = args.condition
 
             # 4. Print initial problem setup
             orchestrator.sprint.problem_init(problem_desc, instructs, apis)

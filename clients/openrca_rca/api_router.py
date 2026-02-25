@@ -4,6 +4,7 @@ Adapted from OpenRCA's api_router.py. Supports OpenAI, Google, Anthropic,
 and generic OpenAI-compatible endpoints.
 """
 
+import logging
 import os
 import time
 import yaml
@@ -95,8 +96,11 @@ _BACKENDS = {
 }
 
 
+logger = logging.getLogger("openrca_rca")
+
+
 def get_chat_completion(messages, configs, temperature=0.0):
-    """Call LLM with retry logic.
+    """Call LLM with unlimited retry on rate limit (429).
 
     Args:
         messages: Chat messages list.
@@ -110,11 +114,15 @@ def get_chat_completion(messages, configs, temperature=0.0):
     if backend is None:
         raise ValueError(f"Invalid SOURCE '{configs['SOURCE']}'. Choose from: {list(_BACKENDS.keys())}")
 
-    for attempt in range(3):
+    attempt = 0
+    while True:
         try:
             return backend(messages, temperature, configs)
         except Exception as e:
-            if "429" in str(e):
-                time.sleep(2 ** attempt)
+            if "429" in str(e) or "rate" in str(e).lower():
+                wait = min(2 ** attempt, 60)
+                logger.warning(f"Rate limited (attempt {attempt + 1}), retrying in {wait}s")
+                time.sleep(wait)
+                attempt += 1
                 continue
             raise

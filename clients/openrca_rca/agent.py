@@ -101,7 +101,7 @@ class OpenRCARCAAgent:
         self.controller_prompt = []
         self.step = 0
 
-    def set_actions(self, actions_obj, namespace, dataset_key, max_steps=25):
+    def set_actions(self, actions_obj, namespace, dataset_key, max_steps=25, condition="all"):
         """Initialize Executor and inject it into the actions object.
 
         Args:
@@ -114,6 +114,7 @@ class OpenRCARCAAgent:
         self.dataset_key = dataset_key
         self.max_steps = max_steps
         self.orchestrator_step = 0
+        self.condition = condition
         self.basic_prompt = get_basic_prompt(dataset_key)
 
         # Initialize IPython kernel with telemetry helper
@@ -134,7 +135,7 @@ class OpenRCARCAAgent:
                 objective=self.problem_desc,
                 format=RESPONSE_FORMAT,
                 agent=controller_rules,
-                background=self.basic_prompt.schema,
+                background=self.basic_prompt.build_schema(condition),
             )},
             {"role": "user", "content": "Let's begin."},
         ]
@@ -149,7 +150,7 @@ class OpenRCARCAAgent:
         """
         code, result, status, self.executor_history = execute_act(
             instruction,
-            self.basic_prompt.schema,
+            self.basic_prompt.build_schema(self.condition),
             self.executor_history,
             self.kernel,
             self.configs,
