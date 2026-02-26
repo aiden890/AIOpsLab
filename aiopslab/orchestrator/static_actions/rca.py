@@ -8,6 +8,7 @@ import pandas as _pd
 from datetime import datetime, timezone as _tz
 
 from aiopslab.orchestrator.static_actions.base import StaticTaskActions
+from aiopslab.orchestrator.static_actions.rule_library import RuleLibraryAction
 from aiopslab.utils.actions import action, executor_action, metric_action, trace_action
 from aiopslab.utils.status import SubmissionStatus
 
@@ -244,12 +245,14 @@ def _analyze_traces(df: _pd.DataFrame, faulty_components=None,
     }
 
 
-class StaticRCAActions(StaticTaskActions):
+class StaticRCAActions(StaticTaskActions, RuleLibraryAction):
     """Actions for OpenRCA root cause analysis tasks."""
 
     def __init__(self, *args, possible_root_causes=None, telemetry_flags=None,
-                 use_executor=True, use_hypothesis=True, **kwargs):
-        super().__init__(*args, **kwargs)
+                 use_executor=True, use_hypothesis=True,
+                 rule_library_dir="results/rule_library", **kwargs):
+        StaticTaskActions.__init__(self, *args, **kwargs)
+        RuleLibraryAction.__init__(self, rule_library_dir)
         self._executor_fn = None
         prc = possible_root_causes or {}
         self.possible_components = prc.get("components", [])

@@ -143,6 +143,16 @@ class OpenRCARCAAgent:
         # Inject Executor callback into actions
         actions_obj.set_executor(self._run_executor)
 
+        # Inject direct kernel runner for run_snippet action
+        if hasattr(actions_obj, "set_direct_runner"):
+            def _direct_run(code: str) -> str:
+                result = self.kernel.run_cell(code)
+                if result.success:
+                    return str(result.result or "").strip()
+                err = result.error_in_exec
+                return f"Error: {type(err).__name__}: {err}" if err else "Error: execution failed"
+            actions_obj.set_direct_runner(_direct_run)
+
     def _run_executor(self, instruction):
         """Executor callback: code gen → IPython execution → LLM summary.
 
