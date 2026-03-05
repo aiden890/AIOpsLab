@@ -5,5 +5,5 @@
 # to auto-detect from .env (AZURE_OPENAI_API_KEY, AZURE_OPENAI_BASE_URL)
 
 SOURCE:   "AI"
-MODEL:    "gpt-4.1-mini"
+MODEL:    "gpt-5"
 # API_KEY and API_BASE are loaded from .env (AZURE_OPENAI_API_KEY, AZURE_OPENAI_BASE_URL)

@@ -1,22 +1,20 @@
-"""Runner for ReAct RCA Agent with self-contained Executor action.
+"""Runner for ReAct RCA Agent with Critic validation.
 
-Uses:
-  - ReactRCAAgent: structured JSON ReAct agent (1 LLM call/step)
-  - StaticRCAActionsWithExecutor: execute() owns IPython kernel + Executor LLM
-  - Score CSV tracking and eval_id
+Same as run_react_rca.py but uses ReactRCACriticAgent which adds a Critic
+validation step between the Controller's observation and instruction phases.
 
 Usage:
     # Run single problem
-    python clients/run_react_rca.py --problem openrca_bank-task_1-0
+    python clients/run_react_rca_critic.py --problem openrca_bank-task_1-0
 
     # Run all Bank problems
-    python clients/run_react_rca.py --dataset openrca_bank
+    python clients/run_react_rca_critic.py --dataset openrca_bank
 
     # Run specific task type
-    python clients/run_react_rca.py --dataset openrca_bank --task-type task_3
+    python clients/run_react_rca_critic.py --dataset openrca_bank --task-type task_3
 
     # Custom eval ID
-    python clients/run_react_rca.py --dataset openrca_bank --eval-id trace_only_01
+    python clients/run_react_rca_critic.py --dataset openrca_bank --eval-id critic_01
 """
 
 import argparse
@@ -32,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from aiopslab.orchestrator.static_orchestrator import StaticOrchestrator
 from aiopslab.orchestrator.static_actions.rca_executor import StaticRCAActionsWithExecutor
-from clients.openrca_rca.react_rca_agent import ReactRCAAgent
+from clients.openrca_rca.react_rca_critic_agent import ReactRCACriticAgent
 from clients.openrca_rca.prompts import get_basic_prompt
 from clients.openrca_rca.prompts.telemetry_guide import build_executor_telemetry_guide
 
@@ -40,7 +38,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
-logger = logging.getLogger("run_react_rca")
+logger = logging.getLogger("run_react_rca_critic")
 
 MAX_STEPS = 40
 
@@ -79,7 +77,7 @@ def append_score(scores_path: Path, eval_id: str, pid: str, results: dict):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="ReAct RCA Agent runner (structured JSON + self-contained Executor)"
+        description="ReAct RCA Agent with Critic runner"
     )
     parser.add_argument("--problem", type=str, help="Single problem ID to run")
     parser.add_argument("--dataset", type=str, help="Filter by dataset (e.g., openrca_bank)")
@@ -133,8 +131,8 @@ if __name__ == "__main__":
         print(f"{'=' * 60}\n")
 
         dataset_key = extract_dataset_key(pid)
-        agent = ReactRCAAgent(api_config_path=api_config_path)
-        orchestrator.register_agent(agent, name="react-rca")
+        agent = ReactRCACriticAgent(api_config_path=api_config_path)
+        orchestrator.register_agent(agent, name="react-rca-critic")
 
         actions: StaticRCAActionsWithExecutor | None = None
 
@@ -203,6 +201,7 @@ if __name__ == "__main__":
 
             # Link executor trajectory to session for logging
             orchestrator.session.extra["executor_trajectory"] = actions._executor_trajectory
+            orchestrator.session.extra["critic_trajectory"] = agent._critic_trajectory
 
             orchestrator.sprint.problem_init(problem_desc, instructs, apis)
 
