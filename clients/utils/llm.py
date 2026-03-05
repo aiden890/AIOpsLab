@@ -153,6 +153,7 @@ class GPTClient:
                     n=1,
                     timeout=60,
                     stop=[],
+                    reasoning_effort="low",
                 )
                 break
             except RateLimitError as e:

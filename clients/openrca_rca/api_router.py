@@ -81,11 +81,11 @@ def _compatible_chat(messages, temperature, configs):
     """OpenAI-compatible endpoint (e.g., vLLM, Azure, third-party)."""
     from openai import OpenAI
     client = OpenAI(api_key=configs["API_KEY"], base_url=configs["API_BASE"])
-    return client.chat.completions.create(
-        model=configs["MODEL"],
-        messages=messages,
-        temperature=temperature,
-    ).choices[0].message.content
+    kwargs = dict(model=configs["MODEL"], messages=messages)
+    # GPT-5 only supports temperature=1 (default); skip param for reasoning models
+    if not configs["MODEL"].startswith("gpt-5"):
+        kwargs["temperature"] = temperature
+    return client.chat.completions.create(**kwargs).choices[0].message.content
 
 
 _BACKENDS = {

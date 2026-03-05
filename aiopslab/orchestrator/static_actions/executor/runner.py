@@ -86,12 +86,20 @@ def execute_act(instruction, background, history, kernel, configs, logger,
                 )})
                 continue
 
-            # Execute in IPython kernel
-            exec_result = kernel.run_cell(code)
+            # Execute in IPython kernel, capturing stdout as fallback
+            from IPython.utils.capture import capture_output
+            with capture_output() as captured:
+                exec_result = kernel.run_cell(code)
             status = exec_result.success
 
             if status:
-                result = str(exec_result.result).strip()
+                # Prefer expression result; fall back to captured stdout
+                if exec_result.result is not None:
+                    result = str(exec_result.result).strip()
+                else:
+                    result = captured.stdout.strip()
+                if not result:
+                    result = "(Code executed successfully with no output)"
 
                 # Check token length
                 tokens_len = len(tokenizer.encode(result))
@@ -126,11 +134,14 @@ def execute_act(instruction, background, history, kernel, configs, logger,
                 return code, result, status, history
             else:
                 # Execution failed - format error and retry
-                err_msg = "".join(traceback.format_exception(
-                    type(exec_result.error_in_exec),
-                    exec_result.error_in_exec,
-                    exec_result.error_in_exec.__traceback__,
-                ))
+                # SyntaxErrors go to error_before_exec; runtime errors to error_in_exec
+                err_obj = exec_result.error_in_exec or exec_result.error_before_exec
+                if err_obj is not None:
+                    err_msg = "".join(traceback.format_exception(
+                        type(err_obj), err_obj, err_obj.__traceback__,
+                    ))
+                else:
+                    err_msg = captured.stderr.strip() if captured.stderr else "Unknown execution error"
                 t2 = datetime.now()
                 logger.warning(f"Execution failed. Error: {err_msg}")
                 logger.debug(f"Time cost: {t2 - t1}")
