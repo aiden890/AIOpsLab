@@ -6,15 +6,16 @@ Key change: uses `telemetry` helper object instead of direct file paths.
 
 rule = """## RULES OF PYTHON CODE WRITING:
 
-1. Reuse variables as much as possible for execution efficiency since the IPython Kernel is stateful, i.e., variables defined in previous steps can be used in subsequent steps.
-2. Use variable name rather than `print()` to display the execution results since your Python environment is IPython Kernel rather than Python.exe. If you want to display multiple variables, use commas to separate them, e.g. `var1, var2`.
-3. Use pandas DataFrame to process and display tabular data for efficiency and briefness. Avoid transforming DataFrame to list or dict type for display.
+1. Reuse variables as much as possible for execution efficiency since the IPython Kernel is stateful, i.e., variables define in previous steps can be used in subsequent steps.
+2. Use variable name rather than `print()` to display the execution results since your Python environment is IPython Kernel rather than Python.exe. If you want to display multiple variables, use commas to separate them, e.g. `var1, var2`. **Always end the code cell with the variable name as the last expression** (e.g., last line must be `result_var`, not `result_var = "..."`), so the value is captured as the cell output. A code cell ending with an assignment returns None and produces no output.
+3. Use pandas Dataframe to process and display tabular data for efficiency and briefness. Avoid transforming Dataframe to list or dict type for display.
 4. If you encounter an error or unexpected result, rewrite the code by referring to the given IPython Kernel error message.
 5. Do not simulate any virtual situation or assume anything unknown. Solve the real problem.
 6. Do not store any data as files in the disk. Only cache the data as variables in the memory.
 7. Do not visualize the data or draw pictures or graphs via Python. You can only provide text-based results. Never include the `matplotlib` or `seaborn` library in the code.
-8. Do not generate anything else except the Python code block except the instruction tells you to 'Use plain English'. If you find the input instruction is a summarization task (which is typically happening in the last step), you should comprehensively summarize the conclusion as a string in your code and display it directly.
+8. Do not generate anything else except the Python code block except the instruction tell you to 'Use plain English'. If you find the input instruction is a summarization task (which is typically happening in the last step), provide comprehensive natural language analysis in your final code step.
 9. Do not calculate threshold AFTER filtering data within the given time duration. Always calculate global thresholds using the entire KPI series of a specific component within a metric file BEFORE filtering data within the given time duration.
+10. **Keep output concise.** The execution result must not exceed ~16,000 tokens. If the data is large, summarize or aggregate it (e.g., use `.groupby()`, `.describe()`, or display only top-N rows) rather than printing the full DataFrame. Never output raw DataFrames with hundreds or thousands of rows.
 
 ## DATA ACCESS:
 
@@ -64,7 +65,7 @@ summary_template = """The code execution is successful. The execution result is 
 
 {result}
 
-Please summarize a straightforward answer to the question based on the execution results. Use plain English."""
+Please summarize a straightforward answer to the question based on the execution results. Use plain English ONLY. Do NOT write Python code. Do NOT use code blocks. Your response must be natural language text."""
 
 conclusion_template = """{answer}
 

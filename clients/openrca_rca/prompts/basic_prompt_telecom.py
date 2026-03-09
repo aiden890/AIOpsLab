@@ -1,9 +1,9 @@
 cand = """## POSSIBLE ROOT CAUSE REASONS:
-
+        
 - CPU fault
 - network delay
-- network loss
-- db connection limit
+- network loss 
+- db connection limit 
 - db close
 
 ## POSSIBLE ROOT CAUSE COMPONENTS:

@@ -84,6 +84,8 @@ def _compatible_chat(messages, temperature, configs):
     # GPT-5 only supports temperature=1 (default); skip param for reasoning models
     if not configs["MODEL"].startswith("gpt-5"):
         kwargs["temperature"] = temperature
+    if configs.get("REASONING_EFFORT"):
+        kwargs["reasoning_effort"] = configs["REASONING_EFFORT"]
     return client.chat.completions.create(**kwargs).choices[0].message.content
 
 

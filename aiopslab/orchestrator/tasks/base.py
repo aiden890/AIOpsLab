@@ -16,7 +16,13 @@ class Task:
 
     def __init__(self):
         self.results = {}
-        self.kubectl = KubeCtl()
+        self._kubectl = None
+
+    @property
+    def kubectl(self):
+        if self._kubectl is None:
+            self._kubectl = KubeCtl()
+        return self._kubectl
 
     def get_task_description(self):
         raise NotImplementedError("Subclasses must implement this method.")

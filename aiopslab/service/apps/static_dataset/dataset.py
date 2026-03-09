@@ -26,7 +26,7 @@ class StaticDataset(Application):
     """Application class for static dataset deployments."""
 
     def __init__(self, dataset_config_name: str, query_index: int = None,
-                 condition: str = None):
+                 condition: str = None, instance_id: str = None):
         """
         Args:
             dataset_config_name: Name of config file without .json extension
@@ -35,6 +35,8 @@ class StaticDataset(Application):
                          sets up time mapping for that specific query.
             condition: Telemetry ablation condition (e.g., "no_log").
                        Appended to namespace to create unique containers per condition.
+            instance_id: Unique suffix to isolate parallel runs of the same dataset
+                         (e.g., query_index as string). Appended after condition suffix.
         """
         super().__init__(str(STATIC_DATASET_METADATA))
 
@@ -50,7 +52,7 @@ class StaticDataset(Application):
         self.load_app_json()
         self.namespace = self.dataset_config["namespace"]
 
-        # Append condition suffix for parallel execution isolation
+        # Append condition suffix for ablation isolation
         self.condition = condition
         if condition and condition != "all":
             self.namespace = f"{self.namespace}-{condition.replace('_', '-')}"
@@ -62,6 +64,14 @@ class StaticDataset(Application):
             }
             if condition in CONDITION_FLAGS:
                 self.dataset_config["telemetry"] = CONDITION_FLAGS[condition]
+
+        # Append instance_id suffix for parallel task isolation
+        # (prevents namespace/container collisions when running multiple tasks from the same dataset,
+        # or even the same task run concurrently in multiple processes)
+        if instance_id is None:
+            import uuid
+            instance_id = uuid.uuid4().hex[:8]
+        self.namespace = f"{self.namespace}-{instance_id}"
 
         # Docker client
         self.docker = Docker()

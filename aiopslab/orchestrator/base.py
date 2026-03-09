@@ -9,6 +9,7 @@ import inspect
 import asyncio
 import atexit
 import os
+import wandb
 
 
 def exit_cleanup_fault(prob):
@@ -29,6 +30,21 @@ class BaseOrchestrator:
         self.use_wandb = os.getenv("USE_WANDB", "false").lower() == "true"
         self.results_dir = results_dir
         self.eval_id = eval_id
+
+    def init_wandb(self, run_name: str, config: dict):
+        """Initialize a single W&B run for the entire experiment (call once before the loop)."""
+        if self.use_wandb:
+            wandb.init(
+                project="aiopslab-rca",
+                name=run_name,
+                config=config,
+                reinit="finish_previous",
+            )
+
+    def finish_wandb(self):
+        """Finish the W&B run (call once after all tasks complete)."""
+        if self.use_wandb:
+            wandb.finish()
 
     def register_agent(self, agent, name="agent"):
         """Register the agent for the current session."""
@@ -144,6 +160,10 @@ class BaseOrchestrator:
         # Initialize log file for session
         log_filepath = self.session.get_filepath(file_type="log")
         self.sprint.init_log_file(str(log_filepath))
+
+        # Stream log file to W&B in real-time
+        if self.use_wandb:
+            wandb.save(str(log_filepath), base_path=str(log_filepath.parent), policy="live")
 
         # Print problem initialization info
         if hasattr(self, '_problem_init_info'):

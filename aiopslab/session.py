@@ -167,8 +167,29 @@ class Session:
         return str(filepath)
 
     def to_wandb(self):
-        """Log the session to Weights & Biases."""
-        wandb.log(self.to_dict())
+        """Log the session to Weights & Biases.
+
+        Logs per-task metrics with problem_id prefix so all tasks
+        appear in a single run. Full session files are uploaded as artifacts.
+        """
+        pid = self.pid or "unknown"
+        r = self.results or {}
+        metrics = {
+            f"tasks/{pid}/score":      r.get("score"),
+            f"tasks/{pid}/success":    r.get("success"),
+            f"tasks/{pid}/steps":      r.get("steps"),
+            f"tasks/{pid}/TTA":        r.get("TTA"),
+            f"tasks/{pid}/in_tokens":  r.get("in_tokens"),
+            f"tasks/{pid}/out_tokens": r.get("out_tokens"),
+            f"tasks/{pid}/task_type":  r.get("task_type"),
+            f"tasks/{pid}/difficulty": r.get("difficulty"),
+        }
+        wandb.log({k: v for k, v in metrics.items() if v is not None})
+
+        # Upload session JSON file to W&B Files
+        json_filepath = self.get_filepath(file_type="json")
+        save_dir = self.get_save_dir()
+        wandb.save(str(json_filepath), base_path=str(save_dir), policy="now")
 
     def from_json(self, filename: str):
         """Load a session from a JSON file."""

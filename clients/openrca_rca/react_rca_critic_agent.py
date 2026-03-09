@@ -422,7 +422,9 @@ class ReactRCACriticAgent:
 
     def get_model_name(self) -> str:
         """Return the controller LLM model name for save path labeling."""
-        return self.configs.get("MODEL", "unknown")
+        model = self.configs.get("MODEL", "unknown")
+        effort = self.configs.get("REASONING_EFFORT")
+        return f"{model}-{effort}" if effort else model
 
     def cleanup(self):
         """No-op: kernel cleanup is handled by StaticRCAActionsWithExecutor."""

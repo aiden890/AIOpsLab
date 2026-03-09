@@ -1,0 +1,74 @@
+Bank Dataset - Top 3 Suspicious Component-Time Pairs (10 Tasks)
+================================================================
+
+Anomaly Detection Method
+------------------------
+- Data: metric_container.csv (per-component KPI time series)
+- Components: 14 valid candidates from Bank prompt only
+  apache01/02, Tomcat01-04, MG01/02, IG01/02, Mysql01/02, Redis01/02
+- Baseline: same-day data EXCLUDING the 30-min incident window
+- Anomaly score: z-score = |window_mean - baseline_mean| / baseline_std
+- Selection: greedy pick maximizing diversity of component type AND KPI category
+- Timezone: query times UTC+8, dataset timestamps UTC (8h offset applied)
+
+Results
+-------
+★ = ground truth component
+
+Task 0 | 14:30~15:00 | GT: Mysql02 @ 14:57 (high memory usage)
+  #1  Redis01    @ 14:30  z=1.96  disk_space
+  #2  IG02       @ 14:42  z=1.51  jvm_cpu
+  #3  Mysql02    @ 14:30  z=1.62  disk_space  ★
+
+Task 1 | 18:00~18:30 | GT: Redis02 @ 18:09 (high memory usage)
+  #1  Tomcat04   @ 18:03  z=1.75  disk_space
+  #2  Mysql01    @ 18:01  z=1.42  cpu
+  #3  Redis02    @ 18:00  z=0.98  disk_space  ★
+
+Task 3 | 19:00~19:30 | GT: Tomcat02 @ 19:22 (network latency)
+  #1  Tomcat04   @ 19:00  z=1.76  disk_space
+  #2  apache01   @ 19:07  z=1.20  cpu
+  #3  Tomcat02   @ 19:00  z=1.35  disk_space  ★
+
+Task 6 | 18:30~19:00 | GT: apache02 @ 18:52 (network packet loss)
+  #1  Tomcat04   @ 18:33  z=1.89  disk_space
+  #2  MG02       @ 18:30  z=1.57  jvm_mem
+  #3  apache02   @ 18:45  z=0.78  disk_space  ★
+
+Task 8 | 23:30~00:00 | GT: MG01 @ 23:36 (network latency)
+  #1  MG02       @ 23:56  z=125.0  disk_space
+  #2  IG02       @ 23:57  z=1.13  jvm_mem
+  #3  MG01       @ 23:33  z=1.74  disk_space  ★
+
+Task 47 | 21:00~21:30 | GT: IG01 @ 21:06 (high JVM CPU load)
+  #1  IG01       @ 21:07  z=6.33  jvm_cpu  ★
+  #2  MG01       @ 21:14  z=1.88  disk_space
+  #3  Tomcat02   @ 21:21  z=0.93  cpu
+
+Task 48 | 06:00~06:30 | GT: MG02 @ 06:20 (JVM OOM Heap)
+  #1  IG02       @ 06:00  z=1.42  jvm_mem
+  #2  apache01   @ 06:00  z=1.29  disk_space
+  #3  MG02       @ 06:02  z=1.02  disk_space  ★
+
+Task 55 | 03:00~03:30 | GT: Tomcat01 @ 03:21 (high disk I/O read usage)
+  #1  Redis01    @ 03:01  z=2.51  disk_space
+  #2  Mysql02    @ 03:00  z=1.47  cpu
+  #3  Tomcat01   @ 03:01  z=1.06  disk_space  ★
+
+Task 60 | 17:30~18:00 | GT: apache01 @ 17:39 (high disk space usage)
+  #1  apache01   @ 17:40  z=108.08  disk_space  ★
+  #2  Mysql01    @ 17:31  z=1.95  cpu
+  #3  IG01       @ 17:30  z=1.09  jvm_mem
+
+Task 68 | 07:00~07:30 | GT: Redis02 @ 07:01 (high CPU usage)
+  #1  Redis02    @ 07:04  z=2.34  cpu  ★
+  #2  IG02       @ 07:00  z=1.42  jvm_mem
+  #3  apache01   @ 07:03  z=1.29  disk_space
+
+Summary
+-------
+- GT in #1: 3/10 (Task 47, 60, 68)
+- GT in #2: 3/10 (none additional)
+- GT in #3: 10/10 (all tasks include GT)
+- GT reasons: memory(2), network(3), jvm_cpu(1), jvm_oom(1), disk_io(1), disk_space(1), cpu(1)
+- Candidate diversity: 11/14 components appear across 30 entries

@@ -48,7 +48,7 @@ Let's begin."""
 RESPONSE_FORMAT = """{
     "analysis": (Your analysis of the code execution result from Executor in the last step, with detailed reasoning of 'what have been done' and 'what can be derived'. Respond 'None' if it is the first step.),
     "completed": ("True" if you believe the issue is resolved, and an answer can be derived in the 'instruction' field. Otherwise "False"),
-    "instruction": (Your instruction for the Executor to perform via code execution in the next step. Do not involve complex multi-step instruction. Keep your instruction atomic, with clear request of 'what to do' and 'how to do'. Respond a summary by yourself if you believe the issue is resolved.)
+    "instruction": (Your instruction for the Executor to perform via code execution in the next step. Do not involve complex multi-step instruction. Keep your instruction atomic, with clear request of 'what to do' and 'how to do'. Respond a summary by yourself if you believe the issue is resolved. Respond a summary by yourself if you believe the issue is resolved. Respond a summary by yourself if you believe the issue is resolved.)
 }
 (DO NOT contain "```json" and "```" tags. DO contain the JSON object with the brackets "{}" only. Use '\\n' instead of an actual newline character to ensure JSON compatibility when you want to insert a line break within a string.)"""
 
@@ -195,7 +195,7 @@ class OpenRCARCAAgent:
             return self._generate_submit()
 
         note = [{"role": "user", "content": (
-            f"Continue your reasoning process for the target issue described above.\n\n"
+            f"Continue your reasoning process for the target issue:\n\n{self.problem_desc}\n\n"
             f"Follow the rules during issue solving:\n\n{controller_rules}.\n\n"
             f"Response format:\n\n{RESPONSE_FORMAT}"
         )}]
@@ -252,6 +252,11 @@ class OpenRCARCAAgent:
                 return self._generate_submit()
             # On error, ask Executor to retry
             return '```\nexecute("Please retry the previous instruction.")\n```'
+
+    def get_model_name(self) -> str:
+        model = self.configs.get("MODEL", "unknown")
+        effort = self.configs.get("REASONING_EFFORT")
+        return f"{model}-{effort}" if effort else model
 
     def cleanup(self):
         """Clean up resources (IPython kernel)."""

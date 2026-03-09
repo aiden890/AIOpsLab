@@ -195,7 +195,7 @@ class StaticTaskActions:
         """Fetches metrics data, saves to CSV, returns file path. start_time/end_time: Unix timestamps (s)."""
         df = self.static_app.fetch_metrics_df(namespace, start_time=start_time, end_time=end_time)
         if df.empty:
-            return f"No metrics found for namespace '{namespace}'"
+            raise RuntimeError(f"No metrics found for namespace '{namespace}'")
 
         save_dir = os.path.join(self.work_dir, "static_metrics_output")
         os.makedirs(save_dir, exist_ok=True)
@@ -209,7 +209,7 @@ class StaticTaskActions:
         """Fetches trace data, saves to CSV, returns file path. start_time/end_time: Unix timestamps (s)."""
         df = self.static_app.fetch_traces_df(namespace, start_time=start_time, end_time=end_time)
         if df.empty:
-            return f"No traces found for namespace '{namespace}'"
+            raise RuntimeError(f"No traces found for namespace '{namespace}'")
 
         save_dir = os.path.join(self.work_dir, "static_traces_output")
         os.makedirs(save_dir, exist_ok=True)

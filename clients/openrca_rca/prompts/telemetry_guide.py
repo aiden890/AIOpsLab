@@ -51,7 +51,7 @@ def build_telemetry_guide(condition="all", dataset_key=None) -> str:
         dataset_key: Dataset identifier (e.g., "telecom"). Telecom has no log data.
     """
     # Telecom dataset has no log data regardless of condition
-    has_logs = dataset_key != "telecom"
+    has_logs = dataset_key is None or "telecom" not in dataset_key
     enable_log = has_logs and condition != "no_log"
     enable_metric = condition != "no_metric"
     enable_trace = condition != "no_trace"

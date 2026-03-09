@@ -86,8 +86,12 @@ class Docker:
                 env=env,
                 timeout=timeout,
             )
-            if out is not None:
-                return out.stdout.decode("utf-8")
+            if out.returncode != 0:
+                raise RuntimeError(
+                    f"Command failed (exit {out.returncode}): {command}\n"
+                    f"{out.stderr.decode('utf-8').strip()}"
+                )
+            return out.stdout.decode("utf-8")
         except subprocess.TimeoutExpired:
             return f"Error: Command timed out after {timeout} seconds"
         except subprocess.CalledProcessError as e:

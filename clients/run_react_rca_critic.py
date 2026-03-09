@@ -91,6 +91,8 @@ def parse_args():
                         help="Eval run identifier (default: auto UUID)")
     parser.add_argument("--start-index", type=int, default=0,
                         help="Skip the first N problems and start from this index (default: 0)")
+    parser.add_argument("--problems-file", type=str, default=None,
+                        help="Path to a text file listing problem IDs (one per line, # comments ignored)")
     return parser.parse_args()
 
 
@@ -107,7 +109,13 @@ if __name__ == "__main__":
 
     orchestrator = StaticOrchestrator(results_dir=str(results_dir), eval_id=eval_id)
 
-    if args.problem:
+    if args.problems_file:
+        with open(args.problems_file) as f:
+            problem_ids = [
+                line.strip() for line in f
+                if line.strip() and not line.strip().startswith("#")
+            ]
+    elif args.problem:
         problem_ids = [args.problem]
     else:
         problem_ids = orchestrator.probs.get_problem_ids(
@@ -121,6 +129,15 @@ if __name__ == "__main__":
 
     logger.info(f"Running {len(problem_ids)} problems | eval_id={eval_id}")
     logger.info(f"Base results dir: {results_dir}\n")
+
+    # W&B: create one run for the entire experiment
+    _tmp_agent = ReactRCACriticAgent(api_config_path=api_config_path)
+    model_name = _tmp_agent.get_model_name()
+    orchestrator.init_wandb(
+        run_name=f"react-rca-critic/{model_name}/{args.dataset}/{eval_id}",
+        config={"agent": "react-rca-critic", "model": model_name, "eval_id": eval_id,
+                "dataset": args.dataset, "total_problems": len(problem_ids)},
+    )
 
     total_score = 0
     completed = 0
@@ -157,6 +174,7 @@ if __name__ == "__main__":
                 telemetry_flags=dataset_config.get("telemetry"),
                 use_executor=use_executor,
                 use_hypothesis=use_hypothesis,
+                work_dir=str(save_dir),
             )
 
             if use_executor:
@@ -227,6 +245,8 @@ if __name__ == "__main__":
         finally:
             if actions is not None:
                 actions.cleanup()
+
+    orchestrator.finish_wandb()
 
     print(f"\n{'=' * 60}")
     print(f"Done! {completed}/{len(problem_ids)} problems completed.")

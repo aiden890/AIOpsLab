@@ -3,7 +3,7 @@
 rule = """## RULES OF PYTHON CODE WRITING:
 
 1. Reuse variables as much as possible for execution efficiency since the IPython Kernel is stateful, i.e., variables defined in previous steps can be used in subsequent steps.
-2. Use variable name rather than `print()` to display the execution results since your Python environment is IPython Kernel rather than Python.exe. If you want to display multiple variables, use commas to separate them, e.g. `var1, var2`.
+2. Use variable name rather than `print()` to display the execution results since your Python environment is IPython Kernel rather than Python.exe. If you want to display multiple variables, use commas to separate them, e.g. `var1, var2`. IMPORTANT: IPython only captures the result of the **last top-level expression** — expressions inside `if/else` blocks are NOT captured. Always place the final display expression at the top level (outside any `if/else`), or use `print()` inside conditional blocks.
 3. Use pandas DataFrame to process and display tabular data for efficiency and briefness. Avoid transforming DataFrame to list or dict type for display.
 4. If you encounter an error or unexpected result, rewrite the code by referring to the given IPython Kernel error message.
 5. Do not simulate any virtual situation or assume anything unknown. Solve the real problem.

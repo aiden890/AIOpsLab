@@ -95,12 +95,8 @@ def execute_act(instruction, background, history, kernel, configs, logger):
             if status:
                 result = str(exec_result.result).strip()
 
-                # Check token length
                 tokens_len = len(tokenizer.encode(result))
-                if tokens_len > 16384:
-                    _failure_reason = f"token_overflow({tokens_len})"
-                    logger.warning(f"Token length exceeds limit: {tokens_len}")
-                    continue
+                logger.info(f"Executor result tokens: {tokens_len}")
 
                 t2 = datetime.now()
 
@@ -116,12 +112,16 @@ def execute_act(instruction, background, history, kernel, configs, logger):
                 logger.debug(f"Execution Result:\n{result}")
                 logger.debug(f"Execution finished. Time cost: {t2 - t1}")
 
-                # Summarize result with LLM
+                # Summarize result with LLM (separate call without executor system prompt)
                 history.append({"role": "assistant", "content": code})
-                history.append({"role": "user", "content": summary_template.format(result=result)})
 
-                answer = get_chat_completion(history, configs)
+                summary_messages = [
+                    {"role": "user", "content": f"Question: {instruction}\n\n{summary_template.format(result=result)}"},
+                ]
+                answer = get_chat_completion(summary_messages, configs)
                 logger.debug(f"Brief Answer:\n{answer}")
+
+                history.append({"role": "user", "content": summary_template.format(result=result)})
 
                 history.append({"role": "assistant", "content": answer})
                 result = conclusion_template.format(answer=answer, result=result)

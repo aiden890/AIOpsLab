@@ -1,0 +1,348 @@
+{
+  "description": "Bank dataset - Top 3 suspicious component-time pairs per task",
+  "method": {
+    "data": "metric_container.csv (per-component KPI time series)",
+    "valid_components": [
+      "IG01",
+      "IG02",
+      "MG01",
+      "MG02",
+      "Mysql01",
+      "Mysql02",
+      "Redis01",
+      "Redis02",
+      "Tomcat01",
+      "Tomcat02",
+      "Tomcat03",
+      "Tomcat04",
+      "apache01",
+      "apache02"
+    ],
+    "baseline": "same-day data excluding 30-min incident window",
+    "anomaly_score": "z-score = |window_mean - baseline_mean| / baseline_std",
+    "selection": "greedy pick maximizing diversity of component type and KPI category",
+    "timezone": "query times UTC+8, dataset timestamps UTC"
+  },
+  "tasks": {
+    "0": {
+      "window": "2021-03-04 14:30 ~ 2021-03-04 15:00",
+      "ground_truth": {
+        "component": "Mysql02",
+        "time": "14:57",
+        "reason": "high memory usage"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "Redis01",
+          "peak_time": "14:30",
+          "z_score": 1.96,
+          "kpi_category": "disk_space"
+        },
+        {
+          "rank": 2,
+          "component": "IG02",
+          "peak_time": "14:42",
+          "z_score": 1.51,
+          "kpi_category": "jvm_cpu"
+        },
+        {
+          "rank": 3,
+          "component": "Mysql02",
+          "peak_time": "14:30",
+          "z_score": 1.62,
+          "kpi_category": "disk_space",
+          "is_gt": true
+        }
+      ]
+    },
+    "1": {
+      "window": "2021-03-04 18:00 ~ 2021-03-04 18:30",
+      "ground_truth": {
+        "component": "Redis02",
+        "time": "18:09",
+        "reason": "high memory usage"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "Tomcat04",
+          "peak_time": "18:03",
+          "z_score": 1.75,
+          "kpi_category": "disk_space"
+        },
+        {
+          "rank": 2,
+          "component": "Mysql01",
+          "peak_time": "18:01",
+          "z_score": 1.42,
+          "kpi_category": "cpu"
+        },
+        {
+          "rank": 3,
+          "component": "Redis02",
+          "peak_time": "18:00",
+          "z_score": 0.98,
+          "kpi_category": "disk_space",
+          "is_gt": true
+        }
+      ]
+    },
+    "3": {
+      "window": "2021-03-04 19:00 ~ 2021-03-04 19:30",
+      "ground_truth": {
+        "component": "Tomcat02",
+        "time": "19:22",
+        "reason": "network latency"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "Tomcat04",
+          "peak_time": "19:00",
+          "z_score": 1.76,
+          "kpi_category": "disk_space"
+        },
+        {
+          "rank": 2,
+          "component": "apache01",
+          "peak_time": "19:07",
+          "z_score": 1.2,
+          "kpi_category": "cpu"
+        },
+        {
+          "rank": 3,
+          "component": "Tomcat02",
+          "peak_time": "19:00",
+          "z_score": 1.35,
+          "kpi_category": "disk_space",
+          "is_gt": true
+        }
+      ]
+    },
+    "6": {
+      "window": "2021-03-06 18:30 ~ 2021-03-06 19:00",
+      "ground_truth": {
+        "component": "apache02",
+        "time": "18:52",
+        "reason": "network packet loss"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "Tomcat04",
+          "peak_time": "18:33",
+          "z_score": 1.89,
+          "kpi_category": "disk_space"
+        },
+        {
+          "rank": 2,
+          "component": "MG02",
+          "peak_time": "18:30",
+          "z_score": 1.57,
+          "kpi_category": "jvm_mem"
+        },
+        {
+          "rank": 3,
+          "component": "apache02",
+          "peak_time": "18:45",
+          "z_score": 0.78,
+          "kpi_category": "disk_space",
+          "is_gt": true
+        }
+      ]
+    },
+    "8": {
+      "window": "2021-03-06 23:30 ~ 2021-03-07 00:00",
+      "ground_truth": {
+        "component": "MG01",
+        "time": "23:36",
+        "reason": "network latency"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "MG02",
+          "peak_time": "23:56",
+          "z_score": 125.0,
+          "kpi_category": "disk_space"
+        },
+        {
+          "rank": 2,
+          "component": "IG02",
+          "peak_time": "23:57",
+          "z_score": 1.13,
+          "kpi_category": "jvm_mem"
+        },
+        {
+          "rank": 3,
+          "component": "MG01",
+          "peak_time": "23:33",
+          "z_score": 1.74,
+          "kpi_category": "disk_space",
+          "is_gt": true
+        }
+      ]
+    },
+    "47": {
+      "window": "2021-03-04 21:00 ~ 2021-03-04 21:30",
+      "ground_truth": {
+        "component": "IG01",
+        "time": "21:06",
+        "reason": "high JVM CPU load"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "IG01",
+          "peak_time": "21:07",
+          "z_score": 6.33,
+          "kpi_category": "jvm_cpu",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "MG01",
+          "peak_time": "21:14",
+          "z_score": 1.88,
+          "kpi_category": "disk_space"
+        },
+        {
+          "rank": 3,
+          "component": "Tomcat02",
+          "peak_time": "21:21",
+          "z_score": 0.93,
+          "kpi_category": "cpu"
+        }
+      ]
+    },
+    "48": {
+      "window": "2021-03-04 06:00 ~ 2021-03-04 06:30",
+      "ground_truth": {
+        "component": "MG02",
+        "time": "06:20",
+        "reason": "JVM Out of Memory (OOM) Heap"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "IG02",
+          "peak_time": "06:00",
+          "z_score": 1.42,
+          "kpi_category": "jvm_mem"
+        },
+        {
+          "rank": 2,
+          "component": "apache01",
+          "peak_time": "06:00",
+          "z_score": 1.29,
+          "kpi_category": "disk_space"
+        },
+        {
+          "rank": 3,
+          "component": "MG02",
+          "peak_time": "06:02",
+          "z_score": 1.02,
+          "kpi_category": "disk_space",
+          "is_gt": true
+        }
+      ]
+    },
+    "55": {
+      "window": "2021-03-07 03:00 ~ 2021-03-07 03:30",
+      "ground_truth": {
+        "component": "Tomcat01",
+        "time": "03:21",
+        "reason": "high disk I/O read usage"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "Redis01",
+          "peak_time": "03:01",
+          "z_score": 2.51,
+          "kpi_category": "disk_space"
+        },
+        {
+          "rank": 2,
+          "component": "Mysql02",
+          "peak_time": "03:00",
+          "z_score": 1.47,
+          "kpi_category": "cpu"
+        },
+        {
+          "rank": 3,
+          "component": "Tomcat01",
+          "peak_time": "03:01",
+          "z_score": 1.06,
+          "kpi_category": "disk_space",
+          "is_gt": true
+        }
+      ]
+    },
+    "60": {
+      "window": "2021-03-09 17:30 ~ 2021-03-09 18:00",
+      "ground_truth": {
+        "component": "apache01",
+        "time": "17:39",
+        "reason": "high disk space usage"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "apache01",
+          "peak_time": "17:40",
+          "z_score": 108.08,
+          "kpi_category": "disk_space",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "Mysql01",
+          "peak_time": "17:31",
+          "z_score": 1.95,
+          "kpi_category": "cpu"
+        },
+        {
+          "rank": 3,
+          "component": "IG01",
+          "peak_time": "17:30",
+          "z_score": 1.09,
+          "kpi_category": "jvm_mem"
+        }
+      ]
+    },
+    "68": {
+      "window": "2021-03-04 07:00 ~ 2021-03-04 07:30",
+      "ground_truth": {
+        "component": "Redis02",
+        "time": "07:01",
+        "reason": "high CPU usage"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "Redis02",
+          "peak_time": "07:04",
+          "z_score": 2.34,
+          "kpi_category": "cpu",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "IG02",
+          "peak_time": "07:00",
+          "z_score": 1.42,
+          "kpi_category": "jvm_mem"
+        },
+        {
+          "rank": 3,
+          "component": "apache01",
+          "peak_time": "07:03",
+          "z_score": 1.29,
+          "kpi_category": "disk_space"
+        }
+      ]
+    }
+  }
+}

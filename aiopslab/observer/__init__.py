@@ -37,8 +37,16 @@ def get_services_list(v1, namespace="default"):
     return services_names
 
 
-config.kube_config.load_kube_config(config_file=monitor_config["kubernetes_path"])
-v1 = client.CoreV1Api()
+import os as _os
+
+_kube_path = _os.path.expanduser(monitor_config["kubernetes_path"])
+v1 = None
+if _os.path.exists(_kube_path):
+    try:
+        config.kube_config.load_kube_config(config_file=_kube_path)
+        v1 = client.CoreV1Api()
+    except Exception:
+        pass
 
 # pod_list = [
 #     pod
