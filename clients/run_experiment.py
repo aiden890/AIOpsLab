@@ -84,6 +84,9 @@ def create_agent(agent_type: str, api_config_path: str):
     elif agent_type == "react":
         from clients.openrca_rca.react_rca_agent import ReactRCAAgent
         return ReactRCAAgent(api_config_path=api_config_path)
+    elif agent_type == "deepdive1":
+        from clients.agents.deepdive1.agent import DeepDiveAgent1
+        return DeepDiveAgent1(api_config_path=api_config_path)
     else:  # original
         from clients.openrca_rca.agent import OpenRCARCAAgent
         return OpenRCARCAAgent(api_config_path=api_config_path)
@@ -94,8 +97,38 @@ def get_agent_name(agent_type: str) -> str:
         return "react-rca-critic"
     elif agent_type == "react":
         return "react-rca"
+    elif agent_type == "deepdive1":
+        return "deepdive-agent-1"
     else:  # original
         return "openrca-rca"
+
+
+def load_candidates_for_task(dataset_key: str, row_index: str) -> list[dict] | None:
+    """Load pre-analyzed top-3 candidates from experiments/ or experiments/candidates/."""
+    experiments_dir = Path(__file__).parent.parent / "experiments"
+    # Map dataset_key to file
+    file_map = {
+        "openrca_bank": "bank_top3_candidates.json",
+        "openrca_telecom": "telecom_top3_candidates.json",
+        "openrca_market_cb1": "market_top3_candidates.json",
+        "openrca_market_cb2": "market_top3_candidates.json",
+    }
+    filename = file_map.get(dataset_key)
+    if not filename:
+        return None
+    # Check candidates/ subdirectory first, then experiments/ root
+    filepath = experiments_dir / "candidates" / filename
+    if not filepath.exists():
+        filepath = experiments_dir / filename
+    if not filepath.exists():
+        logger.warning(f"Candidates file not found: {filepath}")
+        return None
+    with open(filepath) as f:
+        data = json.load(f)
+    tasks = data.get("tasks", {})
+    if row_index in tasks:
+        return tasks[row_index].get("candidates", [])
+    return None
 
 
 def append_score(scores_path: Path, eval_id: str, pid: str, results: dict):
@@ -238,8 +271,8 @@ def parse_args():
     parser.add_argument("--problems-file", type=str, required=True,
                         help="Path to a text file listing problem IDs")
     parser.add_argument("--agent", type=str, default="critic",
-                        choices=["critic", "react", "original"],
-                        help="Agent type: 'critic', 'react', or 'original' (default: critic)")
+                        choices=["critic", "react", "original", "deepdive1"],
+                        help="Agent type: 'critic', 'react', 'original', or 'deepdive1' (default: critic)")
     parser.add_argument("--max-steps", type=int, default=MAX_STEPS,
                         help=f"Max orchestrator steps (default: {MAX_STEPS})")
     parser.add_argument("--results-dir", type=str, default="results/experiments",
@@ -378,18 +411,32 @@ if __name__ == "__main__":
                 problem_desc = problem.get_task_description()
 
                 possible_rca = dataset_config.get("possible_root_causes")
+
+                # Load pre-analyzed candidates for staged agent
+                candidates = None
+                if args.agent == "deepdive1":
+                    row_index = pid.rsplit("-", 1)[-1]  # e.g. "openrca_bank-task_7-3" → "3"
+                    candidates = load_candidates_for_task(dataset_key, row_index)
+
                 agent.init_context(
                     problem_desc, instructs, apis,
                     possible_rca=possible_rca,
-                    dataset_notes=getattr(basic_prompt, "guidance", None),
+                    **({"candidates": candidates} if candidates and args.agent == "deepdive1" else {}),
                 )
 
-                orchestrator._system_message = agent.history[0]["content"]
+                if hasattr(agent, "get_system_prompt"):
+                    orchestrator._system_message = agent.get_system_prompt()
+                elif hasattr(agent, "history"):
+                    orchestrator._system_message = agent.history[0]["content"]
+                else:
+                    orchestrator._system_message = ""
 
                 # Link trajectories
                 orchestrator.session.extra["executor_trajectory"] = actions._executor_trajectory
                 if hasattr(agent, "_critic_trajectory"):
                     orchestrator.session.extra["critic_trajectory"] = agent._critic_trajectory
+                if hasattr(agent, "_agent_trajectory"):
+                    orchestrator.session.extra["agent_trajectory"] = agent._agent_trajectory
 
             orchestrator.sprint.problem_init(problem_desc, instructs, apis)
 
@@ -435,23 +482,21 @@ if __name__ == "__main__":
                 cum_c_pass += p["c"]
                 cum_r_pass += p["r"]
 
+            t_rate = cum_t_pass / cum_t_total * 100 if cum_t_total else 0
+            c_rate = cum_c_pass / cum_c_total * 100 if cum_c_total else 0
+            r_rate = cum_r_pass / cum_r_total * 100 if cum_r_total else 0
+
             wandb.log({
-                "progress/completed": completed,
-                "progress/total": len(problem_ids),
-                "progress/pct": completed / len(problem_ids) * 100,
-                "accuracy/avg_score": avg_score,
-                "accuracy/success_rate": successes / completed * 100 if completed else 0,
-                "accuracy/successes": successes,
-                "accuracy/t_rate": cum_t_pass / cum_t_total * 100 if cum_t_total else 0,
-                "accuracy/c_rate": cum_c_pass / cum_c_total * 100 if cum_c_total else 0,
-                "accuracy/r_rate": cum_r_pass / cum_r_total * 100 if cum_r_total else 0,
-                "accuracy/t_pass": cum_t_pass,
-                "accuracy/t_total": cum_t_total,
-                "accuracy/c_pass": cum_c_pass,
-                "accuracy/c_total": cum_c_total,
-                "accuracy/r_pass": cum_r_pass,
-                "accuracy/r_total": cum_r_total,
+                "T": t_rate,
+                "C": c_rate,
+                "R": r_rate,
             })
+
+            # Overview summary (shown in Runs table)
+            wandb.summary["progress"] = f"{completed}/{len(problem_ids)}"
+            wandb.summary["T"] = round(t_rate, 1)
+            wandb.summary["C"] = round(c_rate, 1)
+            wandb.summary["R"] = round(r_rate, 1)
 
             t_str = f"{cum_t_pass}/{cum_t_total}" if cum_t_total else "N/A"
             c_str = f"{cum_c_pass}/{cum_c_total}" if cum_c_total else "N/A"
@@ -489,13 +534,10 @@ if __name__ == "__main__":
             fc_pass += p["c"]
             fr_pass += p["r"]
 
-        wandb.summary["final/avg_score"] = round(final_avg, 3)
-        wandb.summary["final/success_rate"] = round(final_successes / completed * 100, 1) if completed else 0
-        wandb.summary["final/successes"] = final_successes
-        wandb.summary["final/completed"] = completed
-        wandb.summary["final/t_rate"] = round(ft_pass / ft_total * 100, 1) if ft_total else 0
-        wandb.summary["final/c_rate"] = round(fc_pass / fc_total * 100, 1) if fc_total else 0
-        wandb.summary["final/r_rate"] = round(fr_pass / fr_total * 100, 1) if fr_total else 0
+        wandb.summary["progress"] = f"{completed}/{completed}"
+        wandb.summary["T"] = round(ft_pass / ft_total * 100, 1) if ft_total else 0
+        wandb.summary["C"] = round(fc_pass / fc_total * 100, 1) if fc_total else 0
+        wandb.summary["R"] = round(fr_pass / fr_total * 100, 1) if fr_total else 0
 
     orchestrator.finish_wandb()
 

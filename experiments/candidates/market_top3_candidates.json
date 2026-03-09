@@ -1,0 +1,301 @@
+{
+  "description": "Market cloudbed-1 dataset - Top 3 suspicious component-time pairs per task",
+  "method": {
+    "data": "metrics (per-component KPI time series)",
+    "baseline": "global P95 threshold over full metrics",
+    "anomaly_score": "consecutive anomaly run length and peak excess ratio",
+    "selection": "top 3 by anomaly severity and diversity"
+  },
+  "tasks": {
+    "8": {
+      "window": "2022-03-20 13:00 ~ 2022-03-20 13:30",
+      "ground_truth": {
+        "component": "node-2",
+        "time": "2022-03-20 13:13:19",
+        "reason": "node disk write I/O consumption"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "node-2",
+          "peak_time": "2022-03-20 13:13:19",
+          "reason": "node disk write I/O consumption",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-20 13:01:00",
+          "reason": "node CPU load"
+        },
+        {
+          "rank": 3,
+          "component": "node-1",
+          "peak_time": "2022-03-20 13:09:00",
+          "reason": "node memory consumption"
+        }
+      ]
+    },
+    "13": {
+      "window": "2022-03-20 16:30 ~ 2022-03-20 17:00",
+      "ground_truth": {
+        "component": "currencyservice-0",
+        "time": "2022-03-20 16:31:44",
+        "reason": "container network packet corruption"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "currencyservice-0",
+          "peak_time": "2022-03-20 16:31:44",
+          "reason": "container network packet corruption",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-20 16:30:00",
+          "reason": "node CPU spike"
+        },
+        {
+          "rank": 3,
+          "component": "node-4",
+          "peak_time": "2022-03-20 16:40:00",
+          "reason": "node disk read I/O consumption"
+        }
+      ]
+    },
+    "21": {
+      "window": "2022-03-20 21:00 ~ 2022-03-20 21:30",
+      "ground_truth": {
+        "component": "emailservice",
+        "time": "2022-03-20 21:16:21",
+        "reason": "container packet loss"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "emailservice",
+          "peak_time": "2022-03-20 21:16:21",
+          "reason": "container packet loss",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-20 21:04:00",
+          "reason": "node CPU load"
+        },
+        {
+          "rank": 3,
+          "component": "adservice-2",
+          "peak_time": "2022-03-20 21:17:00",
+          "reason": "container CPU load"
+        }
+      ]
+    },
+    "25": {
+      "window": "2022-03-20 23:00 ~ 2022-03-20 23:30",
+      "ground_truth": {
+        "component": "checkoutservice-2",
+        "time": "2022-03-20 23:09:26",
+        "reason": "container memory load"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "checkoutservice-2",
+          "peak_time": "2022-03-20 23:09:26",
+          "reason": "container memory load",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "adservice-2",
+          "peak_time": "2022-03-20 23:10:00",
+          "reason": "container CPU load"
+        },
+        {
+          "rank": 3,
+          "component": "node-1",
+          "peak_time": "2022-03-20 23:06:00",
+          "reason": "node memory consumption"
+        }
+      ]
+    },
+    "26": {
+      "window": "2022-03-20 23:30 ~ 2022-03-21 00:00",
+      "ground_truth": {
+        "component": "productcatalogservice",
+        "time": "2022-03-20 23:30:10",
+        "reason": "container CPU load"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "productcatalogservice",
+          "peak_time": "2022-03-20 23:30:10",
+          "reason": "container CPU load",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-20 23:32:00",
+          "reason": "node memory consumption"
+        },
+        {
+          "rank": 3,
+          "component": "cartservice",
+          "peak_time": "2022-03-20 23:31:00",
+          "reason": "container network latency"
+        }
+      ]
+    },
+    "29": {
+      "window": "2022-03-20 22:00 ~ 2022-03-20 22:30",
+      "ground_truth": {
+        "component": "frontend-1",
+        "time": "2022-03-20 22:01:12",
+        "reason": "container network latency"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "frontend-1",
+          "peak_time": "2022-03-20 22:01:12",
+          "reason": "container network latency",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-20 22:09:00",
+          "reason": "node CPU spike"
+        },
+        {
+          "rank": 3,
+          "component": "recommendationservice-0",
+          "peak_time": "2022-03-20 22:02:00",
+          "reason": "container network latency"
+        }
+      ]
+    },
+    "32": {
+      "window": "2022-03-20 15:00 ~ 2022-03-20 15:30",
+      "ground_truth": {
+        "component": "shippingservice",
+        "time": "2022-03-20 15:27:23",
+        "reason": "container process termination"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "shippingservice",
+          "peak_time": "2022-03-20 15:27:23",
+          "reason": "container process termination",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-20 15:09:00",
+          "reason": "node CPU load"
+        },
+        {
+          "rank": 3,
+          "component": "node-3",
+          "peak_time": "2022-03-20 15:06:00",
+          "reason": "node disk read I/O consumption"
+        }
+      ]
+    },
+    "33": {
+      "window": "2022-03-21 00:30 ~ 2022-03-21 01:00",
+      "ground_truth": {
+        "component": "cartservice",
+        "time": "2022-03-21 00:37:25",
+        "reason": "container network packet retransmission"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "cartservice",
+          "peak_time": "2022-03-21 00:37:25",
+          "reason": "container network packet retransmission",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-21 00:36:00",
+          "reason": "node CPU spike"
+        },
+        {
+          "rank": 3,
+          "component": "node-1",
+          "peak_time": "2022-03-21 00:36:00",
+          "reason": "node memory consumption"
+        }
+      ]
+    },
+    "50": {
+      "window": "2022-03-21 10:00 ~ 2022-03-21 10:30",
+      "ground_truth": {
+        "component": "node-6",
+        "time": "2022-03-21 10:15:08",
+        "reason": "node CPU spike"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "node-6",
+          "peak_time": "2022-03-21 10:15:08",
+          "reason": "node CPU spike",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-21 10:20:00",
+          "reason": "node CPU load"
+        },
+        {
+          "rank": 3,
+          "component": "node-2",
+          "peak_time": "2022-03-21 10:14:00",
+          "reason": "node disk read I/O consumption"
+        }
+      ]
+    },
+    "61": {
+      "window": "2022-03-21 16:30 ~ 2022-03-21 17:00",
+      "ground_truth": {
+        "component": "node-5",
+        "time": "2022-03-21 16:41:47",
+        "reason": "node disk space consumption"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "node-5",
+          "peak_time": "2022-03-21 16:41:47",
+          "reason": "node disk space consumption",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "node-1",
+          "peak_time": "2022-03-21 16:52:00",
+          "reason": "node CPU spike"
+        },
+        {
+          "rank": 3,
+          "component": "node-3",
+          "peak_time": "2022-03-21 16:49:00",
+          "reason": "node disk read I/O consumption"
+        }
+      ]
+    }
+  }
+}

@@ -1,4 +1,4 @@
-# LLM configuration for OpenRCA RCA Agent - gpt-5 xhigh reasoning
+# LLM configuration for OpenRCA RCA Agent - gpt-5 high reasoning
 # Supported SOURCE values: OpenAI, Google, Anthropic, AI (OpenAI-compatible)
 #
 # For Azure OpenAI: use SOURCE: "AI", leave API_KEY/API_BASE empty
@@ -6,5 +6,5 @@
 
 SOURCE:           "AI"
 MODEL:            "gpt-5"
-REASONING_EFFORT: "xhigh"
+REASONING_EFFORT: "high"
 # API_KEY and API_BASE are loaded from .env (AZURE_OPENAI_API_KEY, AZURE_OPENAI_BASE_URL)

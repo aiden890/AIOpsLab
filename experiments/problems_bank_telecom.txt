@@ -10,18 +10,6 @@ openrca_telecom-task_7-19
 openrca_telecom-task_7-20
 openrca_telecom-task_7-27
 
-# Market cloudbed-1 (10 tasks)
-openrca_market_cb1-task_7-8
-openrca_market_cb1-task_7-13
-openrca_market_cb1-task_7-21
-openrca_market_cb1-task_7-25
-openrca_market_cb1-task_7-26
-openrca_market_cb1-task_7-29
-openrca_market_cb1-task_7-32
-openrca_market_cb1-task_7-33
-openrca_market_cb1-task_7-50
-openrca_market_cb1-task_7-61
-
 # Bank (10 tasks)
 openrca_bank-task_7-0
 openrca_bank-task_7-1

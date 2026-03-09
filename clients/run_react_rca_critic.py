@@ -211,7 +211,6 @@ if __name__ == "__main__":
             agent.init_context(
                 problem_desc, instructs, apis,
                 possible_rca=possible_rca,
-                dataset_notes=getattr(basic_prompt, "guidance", None),
             )
 
             # Expose system prompt so start_problem() prints it via sprint.system_prompt()

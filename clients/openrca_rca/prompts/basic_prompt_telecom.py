@@ -193,14 +193,3 @@ def build_schema(condition="all"):
 
 # Default schema (all types) for backward compatibility
 schema = build_schema("all")
-
-guidance = """\
-## TELECOM-SPECIFIC RCA GUIDANCE:
-
-Since logs are unavailable, use metrics and traces to infer root cause reason:
-
-- **CPU fault**: High `cpu_used` (container metric) or high CPU-related KPIs (e.g., `CPU_iowait_time`, `CPU_user_time`) for the faulty component.
-- **network delay**: High `elapsedTime` in trace spans to/from the faulty component, or high network latency KPIs in node metrics.
-- **network loss**: High packet-drop KPIs (`net_if_in_drop`, `net_if_out_drop`) in node metrics, or sudden drops in `succee_rate` in app metrics.
-- **db connection limit**: High `connected_clients` in middleware metrics, or many failed trace calls (success=False) to a db service with no gap between calls.
-- **db close**: Sudden complete failure of all trace calls to a db service (all success=False) with a sharp drop to 0 in that service's metrics."""
