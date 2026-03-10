@@ -101,11 +101,13 @@ def execute_act(instruction, background, history, kernel, configs, logger,
                 if not result:
                     result = "(Code executed successfully with no output)"
 
-                # Check token length
+                # Truncate overly long results before summarization
                 tokens_len = len(tokenizer.encode(result))
+                was_truncated = False
                 if tokens_len > 16384:
-                    logger.warning(f"Token length exceeds limit: {tokens_len}")
-                    continue
+                    logger.warning(f"Token length exceeds limit: {tokens_len}, truncating")
+                    result = result[:8000] + "\n\n[... truncated ...]\n\n" + result[-2000:]
+                    was_truncated = True
 
                 t2 = datetime.now()
 
@@ -123,7 +125,13 @@ def execute_act(instruction, background, history, kernel, configs, logger,
 
                 # Summarize result with LLM
                 history.append({"role": "assistant", "content": code})
-                history.append({"role": "user", "content": summary_template.format(result=result)})
+                summary_input = summary_template.format(result=result)
+                if was_truncated:
+                    summary_input += (
+                        "\n\nWARNING: The output was truncated due to excessive length. "
+                        "Summarize based on the visible portion. Note any gaps in the data."
+                    )
+                history.append({"role": "user", "content": summary_input})
 
                 answer = get_chat_completion(history, configs)
                 logger.debug(f"Brief Answer:\n{answer}")

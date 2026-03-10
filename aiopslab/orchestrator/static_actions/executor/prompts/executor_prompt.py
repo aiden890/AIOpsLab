@@ -53,10 +53,13 @@ summary_template = """The code execution is successful. The execution result is 
 
 {result}
 
-Please summarize a straightforward answer to the question based on the execution results. Use plain English."""
+Summarize a straightforward answer based on the execution results.
+IMPORTANT:
+- Use plain English only. Do NOT include any Python code, code blocks, or variable assignments.
+- Include specific numbers, component names, and timestamps from the results.
+- Keep the summary concise (under 500 words)."""
 
 conclusion_template = """{answer}
 
-The original code execution output of IPython Kernel is also provided below for reference:
-
+--- Raw Output ---
 {result}"""

@@ -132,16 +132,31 @@ class SessionPrint:
     def agent(self, action):
         self.step_count += 1
 
-        # Always print step progress to terminal
-        print(f"{Fore.CYAN}[Step {self.step_count}]{Style.RESET_ALL}", end=" ", flush=True)
+        # Extract stage header if present (e.g. "[DEEPDIVE] Node=1 C=docker_003 ...")
+        stage_header = ""
+        action_body = action
+        if action.startswith("["):
+            first_nl = action.find("\n")
+            if first_nl != -1:
+                stage_header = action[:first_nl].strip()
+                action_body = action[first_nl + 1:]
+
+        # Single step line with stage info
+        step_label = f"Step {self.step_count}"
+        if stage_header:
+            step_label = f"Step {self.step_count} | {stage_header}"
+
+        print(f"\n{Fore.CYAN}{'=' * 60}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{step_label}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'=' * 60}{Style.RESET_ALL}")
 
         if self.enable_terminal or self.enable_file:
-            self._log("\n" + "=" * 60, f"\n{Fore.CYAN}{'='*60}")
-            self._log(f"Step {self.step_count}", f"Step {self.step_count}")
-            self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
+            if self.enable_file and self.log_file:
+                self.log_file.write(f"\n{'=' * 60}\n{step_label}\n{'=' * 60}\n")
+                self.log_file.flush()
 
             # Try to parse as ReAct format
-            thought, action_text = self._parse_react_response(action)
+            thought, action_text = self._parse_react_response(action_body)
 
             # If ReAct format detected (has thought or action)
             if thought or action_text:
@@ -155,7 +170,7 @@ class SessionPrint:
             else:
                 # Non-ReAct agent: log raw response
                 self._log("🤖 Agent Response:", f"{Fore.GREEN}🤖 Agent Response:{Style.RESET_ALL}")
-                self._log(f"   {action}")
+                self._log(f"   {action_body}")
 
     def service(self, response):
         # Always print step completion to terminal

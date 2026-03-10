@@ -29,7 +29,12 @@ from pathlib import Path
 import tiktoken
 
 from clients.openrca_rca.api_router import load_config, get_chat_completion
-from clients.openrca_rca.prompts.controller_prompt import rules as diagnosis_rules
+_DIAGNOSIS_RULES = """\
+1. Do NOT include any Python code in your response. Provide instructions in natural language for the Executor.
+2. Do NOT convert timestamps manually — let the Executor handle conversions.
+3. Do NOT visualize data or draw graphs. Only text-based results are supported.
+4. Do NOT save anything to the file system. Cache intermediate results in the IPython Kernel.
+5. Do NOT query a specific KPI without first checking which KPIs are available."""
 from clients.agents.deepdive1.prompts import (
     EXPLORATION_PROMPT,
     DEEPDIVE_PROMPT_TEMPLATE,
@@ -37,11 +42,14 @@ from clients.agents.deepdive1.prompts import (
     SYSTEM_TEMPLATE,
     ACTION_LIST_TEMPLATE,
     EXECUTE_SECTION,
-    SUMMARIZE_PROMPT,
     FORCE_SUBMIT_TEMPLATE,
 )
 
 logger = logging.getLogger("deepdive1")
+
+MAX_CONTEXT_FEEDBACK_CHARS = 5000
+MAX_DIGEST_LINES = 80
+MAX_DIGEST_CHARS = 3200
 
 
 # ===========================================================================
@@ -219,7 +227,7 @@ def _build_action_string(action: str, args: dict) -> str:
         return f'```\nsubmit({json.dumps(prediction)})\n```'
     if action == "execute":
         instruction = args.get("instruction", "")
-        escaped = instruction.replace('"', '\\"')
+        escaped = instruction.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
         return f'```\nexecute("{escaped}")\n```'
     arg_strs = []
     for v in args.values():
@@ -289,9 +297,9 @@ class DeepDiveAgent1:
         self.stage_step: int = 0
 
         # Budgets
-        self.exploration_budget: int = 3
-        self.deepdive_budget: int = 5
-        self.expand_budget: int = 3
+        self.exploration_budget: int = 6
+        self.deepdive_budget: int = 10
+        self.expand_budget: int = 6
 
         # Prompt building blocks (set in init_context)
         self.problem_desc: str = ""
@@ -316,6 +324,8 @@ class DeepDiveAgent1:
         possible_rca: dict | None = None,
         dataset_notes: str | None = None,
         candidates: list[dict] | None = None,
+        prefilled_exploration: dict | None = None,
+        dataset_key: str | None = None,
     ):
         """Initialize agent with problem context and pre-analyzed candidates."""
         self.problem_desc = problem_desc
@@ -358,6 +368,48 @@ class DeepDiveAgent1:
             {"role": "user", "content": instructions},
         ]
 
+        if prefilled_exploration:
+            self.bootstrap_exploration(dataset_key=dataset_key, exploration_snapshot=prefilled_exploration)
+
+    def bootstrap_exploration(
+        self,
+        dataset_key: str | None,
+        exploration_snapshot: dict,
+    ) -> None:
+        """Skip EXPLORATION stage by injecting a fixed exploration snapshot."""
+        summary_payload = {
+            "summary_type": "exploration_prefill",
+            "stage_context": "Stage: EXPLORATION (pre-completed)",
+            "dataset": dataset_key or "",
+            "constraint": "Use ONLY this prefilled exploration context for topology/dependency assumptions.",
+            "graph_definitions": exploration_snapshot.get("graph_definitions", {}),
+            "call_graph": exploration_snapshot.get("CALL_GRAPH", {}),
+            "deployment_graph": exploration_snapshot.get("DEPLOYMENT_GRAPH", {}),
+            "shared_resource_graph": exploration_snapshot.get("SHARED_RESOURCE_GRAPH", {}),
+        }
+        summary = json.dumps(summary_payload, ensure_ascii=True, separators=(",", ":"))
+
+        self.system_understanding = summary
+        self.completed_summaries = [summary]
+        self.current_stage = self.DEEP_DIVE
+        self.stage_step = 0
+        self._pending_transition = None
+
+        next_node = self.tree.get_next_pending()
+        if next_node:
+            self.current_node_id = next_node.node_id
+        else:
+            self.current_node_id = None
+            self.current_stage = self.SUBMIT
+
+        self.working_memory.append({
+            "role": "user",
+            "content": (
+                "Exploration is pre-completed. Do not run exploration tasks. "
+                "Start Deep Dive immediately using only the prefilled graph context."
+            ),
+        })
+
     # ------------------------------------------------------------------
     # Main loop entry point
     # ------------------------------------------------------------------
@@ -371,9 +423,10 @@ class DeepDiveAgent1:
         if self._pending_transition:
             self._execute_transition()
 
-        # 2. Append feedback to working memory
+        # 2. Append compacted feedback to working memory (raw stays in session logs)
         resp_instr = self._get_response_instruction()
-        self.working_memory.append({"role": "user", "content": feedback + resp_instr})
+        feedback_digest = self._digest_feedback_for_context(feedback)
+        self.working_memory.append({"role": "user", "content": feedback_digest})
 
         # 3. Check budget-based forced transition
         if self._budget_exceeded():
@@ -385,6 +438,7 @@ class DeepDiveAgent1:
         for _ in range(max_retries):
             try:
                 messages = self._build_messages()
+                messages.append({"role": "user", "content": resp_instr})
                 response = get_chat_completion(messages, self.configs)
 
                 if response is None:
@@ -400,10 +454,9 @@ class DeepDiveAgent1:
                 action = parsed.get("action", "")
                 args = parsed.get("args", {})
 
-                logger.info(
-                    f"{'-'*70}\nStep[{self.step}] Stage={self.current_stage} "
-                    f"Node={self.current_node_id}\n"
-                    f"Thought: {thought}\nAction: {action}({args})\n{'-'*70}"
+                logger.debug(
+                    f"Step[{self.step}] Stage={self.current_stage} "
+                    f"Node={self.current_node_id} Action={action}"
                 )
 
                 # 5. Check for stage signals
@@ -415,6 +468,9 @@ class DeepDiveAgent1:
                     "stage": self.current_stage,
                     "stage_step": self.stage_step,
                     "node_id": self.current_node_id,
+                    "feedback_digest": feedback_digest,
+                    "feedback_raw_chars": len(feedback or ""),
+                    "feedback_raw_preview": (feedback or "")[:1200],
                     "thought": thought,
                     "action": action,
                     "args": args,
@@ -425,9 +481,21 @@ class DeepDiveAgent1:
                     "completed_summaries": list(self.completed_summaries),
                 })
 
-                # 7. Return action string
+                # 7. Return action string with stage/node header
                 action_str = _build_action_string(action, args)
-                return f"Thought: {thought}\n{action_str}" if thought else action_str
+                node_info = self.tree.nodes.get(self.current_node_id) if self.current_node_id else None
+                if node_info and self.current_stage != "EXPLORATION":
+                    header = (f"[{self.current_stage}] Node={self.current_node_id} "
+                              f"C={node_info.component} "
+                              f"T={node_info.time} "
+                              f"(stage_step={self.stage_step})")
+                else:
+                    header = f"[{self.current_stage}] (stage_step={self.stage_step})"
+                parts = [header]
+                if thought:
+                    parts.append(f"Thought: {thought}")
+                parts.append(action_str)
+                return "\n".join(parts)
 
             except json.JSONDecodeError:
                 logger.warning(f"Step[{self.step}] JSON parse failed, retrying.")
@@ -450,6 +518,60 @@ class DeepDiveAgent1:
             return ""
 
         return self._force_submit()
+
+    def _digest_feedback_for_context(self, feedback: str) -> str:
+        """Compress long env feedback into a compact digest for model context."""
+        text = (feedback or "").strip()
+        if not text:
+            return "(empty observation)"
+
+        if len(text) <= MAX_CONTEXT_FEEDBACK_CHARS and text.count("\n") <= MAX_DIGEST_LINES:
+            return text
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            return "(empty observation)"
+
+        # Keep headers and lines with high diagnostic value (time, KPI, errors, confidence signals).
+        pattern = re.compile(
+            r"(UTC|timestamp|time window|\d{4}-\d{2}-\d{2}|"
+            r"error|fail|anomal|deviation|baseline|"
+            r"p50|p95|p99|mad|iqr|latency|timeout|"
+            r"cpu|memory|network|i/o|spans?|trace|log|metric|component|reason|confidence)",
+            re.IGNORECASE,
+        )
+
+        kept: list[str] = []
+        seen: set[str] = set()
+
+        for line in lines[:10]:
+            if line not in seen:
+                kept.append(line)
+                seen.add(line)
+
+        for line in lines[10:]:
+            if not pattern.search(line):
+                continue
+            if line in seen:
+                continue
+            kept.append(line)
+            seen.add(line)
+            if len(kept) >= MAX_DIGEST_LINES:
+                break
+            if len("\n".join(kept)) >= MAX_DIGEST_CHARS:
+                break
+
+        if not kept:
+            kept = lines[: min(20, len(lines))]
+
+        omitted_lines = max(0, len(lines) - len(kept))
+        digest_body = "\n".join(kept)
+        return (
+            "[Observation Digest]\n"
+            f"{digest_body}\n"
+            f"[Digest Meta] original_chars={len(text)}, omitted_lines={omitted_lines}. "
+            "Full raw observation is preserved in session logs/notebooks."
+        )
 
     # ------------------------------------------------------------------
     # Stage signal detection
@@ -615,7 +737,7 @@ class DeepDiveAgent1:
         stage_prompt = self._get_stage_prompt()
         system_content = SYSTEM_TEMPLATE.format(
             problem_desc=self.problem_desc,
-            diagnosis_rules=diagnosis_rules,
+            diagnosis_rules=_DIAGNOSIS_RULES,
             dataset_notes=self._dataset_notes,
             action_list=self.action_content,
             possible_root_causes=_format_possible_rca(self._possible_rca),
@@ -693,7 +815,7 @@ class DeepDiveAgent1:
         stage_prompt = self._get_stage_prompt()
         return SYSTEM_TEMPLATE.format(
             problem_desc=self.problem_desc,
-            diagnosis_rules=diagnosis_rules,
+            diagnosis_rules=_DIAGNOSIS_RULES,
             dataset_notes=self._dataset_notes,
             action_list=self.action_content,
             possible_root_causes=_format_possible_rca(self._possible_rca),
@@ -706,10 +828,142 @@ class DeepDiveAgent1:
     # Summarization
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _clip(value, max_len: int = 240) -> str:
+        text = str(value or "").strip()
+        if len(text) <= max_len:
+            return text
+        return text[: max_len - 3] + "..."
+
+    def _build_structured_summary_prompt(self, content: str, stage_context: str) -> str:
+        if self.current_stage == self.EXPLORATION:
+            return (
+                "You are compressing RCA analysis context.\n"
+                "Return ONLY a JSON object with this exact schema:\n"
+                "{\n"
+                '  "summary_type": "exploration",\n'
+                '  "stage_context": "<copied context>",\n'
+                '  "components": ["..."],\n'
+                '  "topology": ["caller -> callee", "..."],\n'
+                '  "kpi_baselines": ["kpi=value (component/time)", "..."],\n'
+                '  "global_anomalies": ["...", "..."],\n'
+                '  "open_questions": ["...", "..."]\n'
+                "}\n"
+                "Rules:\n"
+                "- Keep each list <= 6 items.\n"
+                "- Use concrete metrics/timestamps where available.\n"
+                "- If unknown, return empty string/list, not prose.\n\n"
+                f"Context: {stage_context}\n\n"
+                f"Analysis:\n{content}"
+            )
+
+        return (
+            "You are compressing RCA node analysis context.\n"
+            "Return ONLY a JSON object with this exact schema:\n"
+            "{\n"
+            '  "summary_type": "node",\n'
+            '  "stage_context": "<copied context>",\n'
+            '  "node_id": "<id>",\n'
+            '  "component": "<component>",\n'
+            '  "candidate_time": "<UTC time>",\n'
+            '  "analysis_window_utc": "<window or empty>",\n'
+            '  "verdict": "CONFIRMED|REJECTED|PENDING|UNKNOWN",\n'
+            '  "confidence": "high|medium|low|",\n'
+            '  "evidence_table": [\n'
+            '    {"claim":"...","supporting_evidence":"...","counter_evidence":"...","status":"supported|refuted|mixed"}\n'
+            "  ],\n"
+            '  "next_action": "<short next step or empty>"\n'
+            "}\n"
+            "Rules:\n"
+            "- evidence_table must be explicit claim/evidence/counter-evidence rows.\n"
+            "- Keep evidence_table <= 4 rows.\n"
+            "- Include concrete numbers/timestamps in evidence where possible.\n"
+            "- Use UTC in analysis_window_utc when available.\n\n"
+            f"Context: {stage_context}\n\n"
+            f"Analysis:\n{content}"
+        )
+
+    def _normalize_structured_summary(
+        self,
+        parsed: dict,
+        stage_context: str,
+    ) -> dict:
+        def as_list(value, max_items: int = 6, max_len: int = 220) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            out = []
+            for item in value[:max_items]:
+                clipped = self._clip(item, max_len=max_len)
+                if clipped:
+                    out.append(clipped)
+            return out
+
+        if self.current_stage == self.EXPLORATION:
+            return {
+                "summary_type": "exploration",
+                "stage_context": stage_context,
+                "components": as_list(parsed.get("components"), max_items=8, max_len=80),
+                "topology": as_list(parsed.get("topology"), max_items=8),
+                "kpi_baselines": as_list(parsed.get("kpi_baselines")),
+                "global_anomalies": as_list(parsed.get("global_anomalies")),
+                "open_questions": as_list(parsed.get("open_questions"), max_items=4),
+            }
+
+        node_id = ""
+        component = ""
+        candidate_time = ""
+        if self.current_node_id and self.current_node_id in self.tree.nodes:
+            node = self.tree.nodes[self.current_node_id]
+            node_id = node.node_id
+            component = node.component
+            candidate_time = node.time
+
+        verdict = str(parsed.get("verdict", "UNKNOWN")).upper()
+        if verdict not in {"CONFIRMED", "REJECTED", "PENDING", "UNKNOWN"}:
+            verdict = "UNKNOWN"
+
+        confidence = str(parsed.get("confidence", "")).lower()
+        if confidence not in {"high", "medium", "low", ""}:
+            confidence = ""
+
+        rows = parsed.get("evidence_table", [])
+        normalized_rows = []
+        if isinstance(rows, list):
+            for row in rows[:4]:
+                if not isinstance(row, dict):
+                    continue
+                status = str(row.get("status", "mixed")).lower()
+                if status not in {"supported", "refuted", "mixed"}:
+                    status = "mixed"
+                normalized_rows.append({
+                    "claim": self._clip(row.get("claim", ""), max_len=180),
+                    "supporting_evidence": self._clip(row.get("supporting_evidence", ""), max_len=260),
+                    "counter_evidence": self._clip(row.get("counter_evidence", ""), max_len=220),
+                    "status": status,
+                })
+
+        return {
+            "summary_type": "node",
+            "stage_context": stage_context,
+            "node_id": self._clip(parsed.get("node_id", node_id), max_len=20) or node_id,
+            "component": self._clip(parsed.get("component", component), max_len=80) or component,
+            "candidate_time": self._clip(parsed.get("candidate_time", candidate_time), max_len=32) or candidate_time,
+            "analysis_window_utc": self._clip(parsed.get("analysis_window_utc", ""), max_len=80),
+            "verdict": verdict,
+            "confidence": confidence,
+            "evidence_table": normalized_rows,
+            "next_action": self._clip(parsed.get("next_action", ""), max_len=180),
+        }
+
     def _summarize_working_memory(self) -> str:
-        """LLM call to compress working memory into 1-paragraph summary."""
+        """LLM call to compress working memory into a fixed structured summary."""
         if not self.working_memory:
-            return f"[{self.current_stage}] (no data collected)"
+            fallback = {
+                "summary_type": "fallback",
+                "stage_context": f"Stage: {self.current_stage}",
+                "note": "no data collected",
+            }
+            return json.dumps(fallback, ensure_ascii=True, separators=(",", ":"))
 
         content_parts = []
         for msg in self.working_memory:
@@ -726,23 +980,37 @@ class DeepDiveAgent1:
             stage_context += f" | Node [{node.node_id}] C={node.component} T={node.time}"
 
         summarize_messages = [
-            {"role": "system", "content": SUMMARIZE_PROMPT.format(content=content)},
-            {"role": "user", "content": f"Context: {stage_context}\n\nPlease summarize."},
+            {
+                "role": "system",
+                "content": self._build_structured_summary_prompt(content, stage_context),
+            },
         ]
 
         try:
             summary = get_chat_completion(summarize_messages, self.configs)
             if summary:
-                return f"[{stage_context}]\n{summary}"
+                parsed = json.loads(_extract_json(summary))
+                normalized = self._normalize_structured_summary(parsed, stage_context)
+                return json.dumps(normalized, ensure_ascii=True, separators=(",", ":"))
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
 
         for msg in reversed(self.working_memory):
             if msg["role"] == "assistant":
-                text = msg["content"][:500]
-                return f"[{stage_context}]\n{text}"
+                fallback = {
+                    "summary_type": "fallback",
+                    "stage_context": stage_context,
+                    "note": "summarization failed; using assistant tail",
+                    "assistant_tail": self._clip(msg["content"], max_len=500),
+                }
+                return json.dumps(fallback, ensure_ascii=True, separators=(",", ":"))
 
-        return f"[{stage_context}] (summarization failed)"
+        fallback = {
+            "summary_type": "fallback",
+            "stage_context": stage_context,
+            "note": "summarization failed",
+        }
+        return json.dumps(fallback, ensure_ascii=True, separators=(",", ":"))
 
     # ------------------------------------------------------------------
     # Force submit

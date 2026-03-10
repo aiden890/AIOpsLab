@@ -6,6 +6,50 @@
 모든 agent는 공통 3단계 프레임워크를 따르며, 본 실험은 **Stage 2 (Deep Dive), Stage 3 (Expand)에 집중**한다.
 Stage 1 (Localization)의 후보 3개는 사전 분석으로 고정 제공된다.
 
+## Deep Dive-Only (Exploration Prefill) 실험
+
+Exploration 단계를 실제 실행하지 않고, 사전 정의된 그래프 스냅샷(CALL/DEPLOYMENT/SHARED_RESOURCE)을
+`system_understanding`에 주입한 뒤 Deep Dive부터 시작하는 전용 러너를 추가했다.
+
+- 스크립트: `experiments/run_deepdive_prefilled_tc3.py`
+- 선택 규칙: `experiments/problems_30.txt`에서 Telecom 중 `T+C` GT(task_4 또는 task_7) 상위 3개
+- 현재 기본 30-task 파일에서는 `openrca_telecom-task_7-0`, `-2`, `-4`가 선택됨
+
+실행 예시:
+
+```bash
+.venv/bin/python experiments/run_deepdive_prefilled_tc3.py \
+  --agent deepdive1 \
+  --api-config clients/openrca_rca/api_config_low.yaml \
+  --max-steps 40
+```
+
+결과 저장:
+
+- `experiments/exp_{k}/prompt_used.txt` (실험 **입력 프롬프트** 파일; 실행 시 dataset_notes로 주입)
+- `experiments/exp_{k}/result_01_*.json`
+- `experiments/exp_{k}/result_02_*.json`
+- `experiments/exp_{k}/result_03_*.json`
+- `experiments/exp_{k}/orchestrator_results/...` (세션 원본 로그/json/ipynb)
+
+## Agent Variants (DeepDive)
+
+기본 DeepDive agent는 아래 2가지를 공통 포함한다.
+
+- Temporal precedence (원인-결과 시간선행)
+- Triangulation (복수 telemetry source 교차 검증)
+
+옵션별 실험 agent는 기본 프롬프트를 유지한 채 Deep Dive 규칙 1개만 추가한다.
+
+| Agent Type (`--agent`) | 디렉토리 | 추가 규칙 |
+|---|---|---|
+| `deepdive1` | `clients/agents/deepdive1` | 기본(Temporal precedence + Triangulation) |
+| `deepdive-hypothesis` | `clients/agents/deepdive_hypothesis` | Hypothesis-driven loop |
+| `deepdive-baseline` | `clients/agents/deepdive_baseline` | Baseline vs Incident |
+| `deepdive-evidence` | `clients/agents/deepdive_evidence` | Explicit Evidence Table |
+| `deepdive-multisignal` | `clients/agents/deepdive_multisignal` | Multi-signal confirmation policy |
+| `deepdive-robust` | `clients/agents/deepdive_robust` | Robust stats (MAD/IQR/percentile) |
+
 ## 3-Stage Framework
 
 ```
@@ -235,15 +279,15 @@ RESULT: C=MG01 T=19:20 R=network latency
 ├─────────────────────────────────────────────────────────────┤
 │  Layer 2: STAGE SUMMARY (완료된 node 요약, 축적)             │
 │                                                             │
-│  · 완료된 각 node의 1-paragraph 요약                         │
-│  · 핵심 수치와 판단 근거만 포함                               │
+│  · 완료된 각 node의 구조화 JSON 요약                          │
+│  · evidence_table(claim/support/counter/status) 고정 포함     │
 │                                                             │
 │  예상 크기: ~200 tokens/node, 총 ~1-2k tokens               │
 ├─────────────────────────────────────────────────────────────┤
-│  Layer 3: WORKING MEMORY (현재 node의 raw 대화)              │
+│  Layer 3: WORKING MEMORY (현재 node의 실행 대화)             │
 │                                                             │
-│  · 현재 진행 중인 node의 action 호출 및 결과 원문             │
-│  · executor 결과, trace/metric/log raw 데이터                │
+│  · 현재 node의 action 호출 및 결과 digest                     │
+│  · 긴 observation은 핵심 라인만 유지 (원문은 세션 로그 보존)   │
 │  · stage 전환 시 초기화 (요약 후 Layer 2로 이동)              │
 │                                                             │
 │  예상 크기: ~20-80k tokens (가변)                            │
@@ -278,12 +322,12 @@ Stage: {self.current_stage}  |  Node: {self.current_node}
     {"role": "user", "content": """
 ## Completed Analysis
 {self.completed_summaries}
-# ← 완료된 node들의 1-paragraph 요약 목록
+    # ← 완료된 node들의 구조화 JSON 요약 목록
 """},
 
-    # ── Layer 3: Working memory (현재 node raw 대화) ──
+    # ── Layer 3: Working memory (현재 node 실행 대화) ──
     *self.working_memory,
-    # ← 현재 node에서의 action 호출/결과 원문
+    # ← 현재 node에서의 action 호출/결과 digest
 ]
 ```
 
@@ -295,16 +339,15 @@ Stage: {self.current_stage}  |  Node: {self.current_node}
         ▼
 ┌─────────────────────────────────────────┐
 │  1. SUMMARIZE                           │
-│     working_memory → LLM에게 요약 요청   │
-│     "1-paragraph로 핵심 수치와 판단 근거  │
-│      요약해줘"                           │
+│     working_memory → LLM 구조화 요약 요청 │
+│     (고정 JSON schema)                  │
 │                                         │
 │  예시 출력:                              │
-│  "Node [1] Tomcat02: CONFIRMED.          │
-│   trace elapsed 3200ms (baseline 45ms),  │
-│   network_gap_ratio=0.89, error log      │
-│   'connection timeout' at 19:22:15.      │
-│   Reason: network latency, conf=high"    │
+│  {"summary_type":"node",                 │
+│   "verdict":"CONFIRMED","confidence":"high",│
+│   "evidence_table":[{"claim":"...",       │
+│   "supporting_evidence":"...",            │
+│   "counter_evidence":"...","status":"supported"}]} │
 └──────────────┬──────────────────────────┘
                │
                ▼
@@ -386,8 +429,8 @@ Step 12: SUBMIT
 | `DiagnosisTree` | tree 관리 클래스 (render, update, get_root) | `staged_rca_agent.py` |
 | `system_understanding` | Exploration 결과 요약 문자열 | agent 인스턴스 변수 |
 | `completed_summaries` | 완료 node 요약 리스트 | agent 인스턴스 변수 |
-| `working_memory` | 현재 node raw 대화 리스트 | agent 인스턴스 변수 |
-| `_summarize_node()` | working_memory → 1-paragraph 요약 LLM 호출 | agent 메서드 |
+| `working_memory` | 현재 node observation digest + action 대화 | agent 인스턴스 변수 |
+| `_summarize_working_memory()` | working_memory → 구조화 JSON 요약 LLM 호출 | agent 메서드 |
 | `_build_messages()` | 3-layer 조합하여 messages 리스트 생성 | agent 메서드 |
 
 ---

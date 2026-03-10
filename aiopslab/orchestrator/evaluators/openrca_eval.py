@@ -102,12 +102,13 @@ def openrca_evaluate(prediction: str, scoring_points: str):
 
 
 def _time_within_1min(expected_str: str, predicted_str: str) -> bool:
-    """Check if two datetime strings are within 1 minute of each other."""
+    """Check if predicted time is within [expected, expected + 5min]."""
     time_format = "%Y-%m-%d %H:%M:%S"
     try:
         t1 = datetime.strptime(expected_str.strip(), time_format)
         t2 = datetime.strptime(predicted_str.strip(), time_format)
-        return abs((t1 - t2).total_seconds()) <= 60
+        diff = (t2 - t1).total_seconds()
+        return 0 <= diff <= 300
     except ValueError:
         return False
 

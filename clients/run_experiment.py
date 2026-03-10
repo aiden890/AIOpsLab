@@ -36,7 +36,7 @@ import re
 import sys
 import uuid
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 import wandb
@@ -87,6 +87,21 @@ def create_agent(agent_type: str, api_config_path: str):
     elif agent_type == "deepdive1":
         from clients.agents.deepdive1.agent import DeepDiveAgent1
         return DeepDiveAgent1(api_config_path=api_config_path)
+    elif agent_type == "deepdive-hypothesis":
+        from clients.agents.deepdive_hypothesis.agent import DeepDiveAgentHypothesis
+        return DeepDiveAgentHypothesis(api_config_path=api_config_path)
+    elif agent_type == "deepdive-baseline":
+        from clients.agents.deepdive_baseline.agent import DeepDiveAgentBaseline
+        return DeepDiveAgentBaseline(api_config_path=api_config_path)
+    elif agent_type == "deepdive-evidence":
+        from clients.agents.deepdive_evidence.agent import DeepDiveAgentEvidence
+        return DeepDiveAgentEvidence(api_config_path=api_config_path)
+    elif agent_type == "deepdive-multisignal":
+        from clients.agents.deepdive_multisignal.agent import DeepDiveAgentMultiSignal
+        return DeepDiveAgentMultiSignal(api_config_path=api_config_path)
+    elif agent_type == "deepdive-robust":
+        from clients.agents.deepdive_robust.agent import DeepDiveAgentRobust
+        return DeepDiveAgentRobust(api_config_path=api_config_path)
     else:  # original
         from clients.openrca_rca.agent import OpenRCARCAAgent
         return OpenRCARCAAgent(api_config_path=api_config_path)
@@ -99,6 +114,16 @@ def get_agent_name(agent_type: str) -> str:
         return "react-rca"
     elif agent_type == "deepdive1":
         return "deepdive-agent-1"
+    elif agent_type == "deepdive-hypothesis":
+        return "deepdive-agent-hypothesis"
+    elif agent_type == "deepdive-baseline":
+        return "deepdive-agent-baseline"
+    elif agent_type == "deepdive-evidence":
+        return "deepdive-agent-evidence"
+    elif agent_type == "deepdive-multisignal":
+        return "deepdive-agent-multisignal"
+    elif agent_type == "deepdive-robust":
+        return "deepdive-agent-robust"
     else:  # original
         return "openrca-rca"
 
@@ -127,8 +152,37 @@ def load_candidates_for_task(dataset_key: str, row_index: str) -> list[dict] | N
         data = json.load(f)
     tasks = data.get("tasks", {})
     if row_index in tasks:
-        return tasks[row_index].get("candidates", [])
+        candidates = tasks[row_index].get("candidates", [])
+        return _normalize_candidate_times_to_utc(dataset_key, candidates)
     return None
+
+
+def _normalize_candidate_times_to_utc(dataset_key: str, candidates: list[dict]) -> list[dict]:
+    """Normalize OpenRCA candidate times from UTC+8 text to UTC text.
+
+    OpenRCA source query/record times are UTC+8. DeepDive candidates are generated
+    from those times, so we normalize full datetime strings before passing them to
+    the agent that issues UTC-based telemetry queries.
+    """
+    if not dataset_key.startswith("openrca_"):
+        return candidates
+
+    utc8 = timezone(timedelta(hours=8))
+    out: list[dict] = []
+    for cand in candidates:
+        row = dict(cand)
+        for key in ("peak_time", "time"):
+            raw = row.get(key)
+            if not isinstance(raw, str):
+                continue
+            try:
+                dt = datetime.strptime(raw.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=utc8)
+                row[key] = dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # Keep non-datetime formats (e.g., "14:30") as-is.
+                pass
+        out.append(row)
+    return out
 
 
 def append_score(scores_path: Path, eval_id: str, pid: str, results: dict):
@@ -271,8 +325,23 @@ def parse_args():
     parser.add_argument("--problems-file", type=str, required=True,
                         help="Path to a text file listing problem IDs")
     parser.add_argument("--agent", type=str, default="critic",
-                        choices=["critic", "react", "original", "deepdive1"],
-                        help="Agent type: 'critic', 'react', 'original', or 'deepdive1' (default: critic)")
+                        choices=[
+                            "critic",
+                            "react",
+                            "original",
+                            "deepdive1",
+                            "deepdive-hypothesis",
+                            "deepdive-baseline",
+                            "deepdive-evidence",
+                            "deepdive-multisignal",
+                            "deepdive-robust",
+                        ],
+                        help=(
+                            "Agent type: critic/react/original/deepdive1/"
+                            "deepdive-hypothesis/deepdive-baseline/"
+                            "deepdive-evidence/deepdive-multisignal/deepdive-robust "
+                            "(default: critic)"
+                        ))
     parser.add_argument("--max-steps", type=int, default=MAX_STEPS,
                         help=f"Max orchestrator steps (default: {MAX_STEPS})")
     parser.add_argument("--results-dir", type=str, default="results/experiments",
@@ -414,14 +483,21 @@ if __name__ == "__main__":
 
                 # Load pre-analyzed candidates for staged agent
                 candidates = None
-                if args.agent == "deepdive1":
+                if args.agent in {
+                    "deepdive1",
+                    "deepdive-hypothesis",
+                    "deepdive-baseline",
+                    "deepdive-evidence",
+                    "deepdive-multisignal",
+                    "deepdive-robust",
+                }:
                     row_index = pid.rsplit("-", 1)[-1]  # e.g. "openrca_bank-task_7-3" → "3"
                     candidates = load_candidates_for_task(dataset_key, row_index)
 
                 agent.init_context(
                     problem_desc, instructs, apis,
                     possible_rca=possible_rca,
-                    **({"candidates": candidates} if candidates and args.agent == "deepdive1" else {}),
+                    **({"candidates": candidates} if candidates else {}),
                 )
 
                 if hasattr(agent, "get_system_prompt"):
@@ -486,17 +562,18 @@ if __name__ == "__main__":
             c_rate = cum_c_pass / cum_c_total * 100 if cum_c_total else 0
             r_rate = cum_r_pass / cum_r_total * 100 if cum_r_total else 0
 
-            wandb.log({
-                "T": t_rate,
-                "C": c_rate,
-                "R": r_rate,
-            })
+            if orchestrator.use_wandb:
+                wandb.log({
+                    "T": t_rate,
+                    "C": c_rate,
+                    "R": r_rate,
+                })
 
-            # Overview summary (shown in Runs table)
-            wandb.summary["progress"] = f"{completed}/{len(problem_ids)}"
-            wandb.summary["T"] = round(t_rate, 1)
-            wandb.summary["C"] = round(c_rate, 1)
-            wandb.summary["R"] = round(r_rate, 1)
+                # Overview summary (shown in Runs table)
+                wandb.summary["progress"] = f"{completed}/{len(problem_ids)}"
+                wandb.summary["T"] = round(t_rate, 1)
+                wandb.summary["C"] = round(c_rate, 1)
+                wandb.summary["R"] = round(r_rate, 1)
 
             t_str = f"{cum_t_pass}/{cum_t_total}" if cum_t_total else "N/A"
             c_str = f"{cum_c_pass}/{cum_c_total}" if cum_c_total else "N/A"
@@ -534,10 +611,11 @@ if __name__ == "__main__":
             fc_pass += p["c"]
             fr_pass += p["r"]
 
-        wandb.summary["progress"] = f"{completed}/{completed}"
-        wandb.summary["T"] = round(ft_pass / ft_total * 100, 1) if ft_total else 0
-        wandb.summary["C"] = round(fc_pass / fc_total * 100, 1) if fc_total else 0
-        wandb.summary["R"] = round(fr_pass / fr_total * 100, 1) if fr_total else 0
+        if orchestrator.use_wandb:
+            wandb.summary["progress"] = f"{completed}/{completed}"
+            wandb.summary["T"] = round(ft_pass / ft_total * 100, 1) if ft_total else 0
+            wandb.summary["C"] = round(fc_pass / fc_total * 100, 1) if fc_total else 0
+            wandb.summary["R"] = round(fr_pass / fr_total * 100, 1) if fr_total else 0
 
     orchestrator.finish_wandb()
 
