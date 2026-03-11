@@ -188,13 +188,13 @@ def _normalize_json_response(text: str) -> str:
         return json.dumps(obj, ensure_ascii=False, indent=2)
     except Exception:
         fallback = {
-            "report_type": "anomaly_report",
+            "report_type": "outlier_report",
             "component": "",
             "window_utc": {"start": "", "end": ""},
             "baseline_method": "unknown",
             "threshold_rule": "unknown",
             "kpi_results": [],
-            "target_timestamp_check": {"timestamp_utc": "", "anomalous_metrics": []},
+            "target_timestamp_check": {"timestamp_utc": "", "outlier_metrics": []},
             "data_quality": {"missing_minutes_utc": [], "notes": ["schema_parse_failed"]},
             "summary": text.strip()[:1000],
         }

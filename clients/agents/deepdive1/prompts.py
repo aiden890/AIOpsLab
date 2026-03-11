@@ -38,7 +38,7 @@ When not satisfied, set "stage_complete": false.
 Important:
 - Even when stage_complete is true, return a valid action.
 - If no additional data retrieval is needed, use an available analysis API
-  (`execute()` or `execute_anomaly_report()`) with a no-op instruction.
+  (`execute()` or `execute_outlier_report()`) with a no-op instruction.
 
 Response format:
 {{"thought": "...", "action": "...", "args": {{...}}, "stage_complete": false}}
@@ -161,7 +161,7 @@ Before requesting new computations, explicitly ask to reuse already cached
 DataFrames/threshold tables (e.g., prior p95 baselines) whenever applicable.
 Avoid re-fetching or re-computing the same window/component unless needed.
 
-IMPORTANT: Use analysis APIs (`execute()` or `execute_anomaly_report()`) ONLY to fetch or compute data (metrics, traces, logs).
+IMPORTANT: Use analysis APIs (`execute()` or `execute_outlier_report()`) ONLY to fetch or compute data (metrics, traces, logs).
 Do NOT use analysis APIs to summarize, conclude, or identify root causes.
 YOU (the controller) are responsible for reasoning over the results and submitting.
 

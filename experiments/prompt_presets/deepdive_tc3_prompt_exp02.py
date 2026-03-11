@@ -1,8 +1,8 @@
 """Experiment-side prompt source for DeepDive TC3 runs (exp02).
 
-This preset is for the structured anomaly-report executor API.
+This preset is for the structured outlier-report executor API.
 Use with:
-  --executor-api anomaly_report
+  --executor-api outlier_report
 """
 
 from clients.agents.deepdive1.prompts import (

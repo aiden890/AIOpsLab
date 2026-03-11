@@ -362,11 +362,11 @@ class DeepDiveAgent1:
         # Build action list
         analysis_apis = {
             k: v for k, v in apis.items()
-            if k in ("execute", "execute_anomaly_report")
+            if k in ("execute", "execute_outlier_report")
         }
         submit_api = {k: v for k, v in apis.items() if k == "submit"}
         prebuilt_apis = {k: v for k, v in apis.items()
-                         if k not in ("execute", "execute_anomaly_report", "exec_shell", "submit")}
+                         if k not in ("execute", "execute_outlier_report", "exec_shell", "submit")}
 
         analysis_api_section = (
             ANALYSIS_API_SECTION.format(analysis_apis=_stringify_apis(analysis_apis))

@@ -44,7 +44,7 @@ _TRACE_LOCALIZATION_STEP = """\
      - `callee_score > 0` → the component is failing as a server → it IS the root cause candidate
      - `callee_score = 0.00`, `caller_score` high → the component is slow AS A CLIENT (victim of something it calls) → do NOT use it as the root cause; instead investigate its downstream callees
   3. **For network-related faults (packet loss / latency): KPI metrics alone are often insufficient.**
-     Use an executor action (`execute()` or `execute_anomaly_report()`) to examine the latency relationship between parent spans and child spans in traces:
+     Use an executor action (`execute()` or `execute_outlier_report()`) to examine the latency relationship between parent spans and child spans in traces:
      - Reconstruct parent-child pairs via `parent_id` → `span_id` join
      - If a parent span's duration is much larger than the sum of its children's durations, the gap is transport/network time → indicates network latency or packet loss at that component
      - The component whose spans consistently show this gap is the network fault origin
@@ -172,7 +172,7 @@ The Executor generates Python code from your instruction and runs it in a
 stateful IPython kernel. Variables persist across calls — reuse them.
 Provide detailed, atomic instructions. One data objective per call.
 
-IMPORTANT: Use an executor action (`execute()` or `execute_anomaly_report()`) ONLY to fetch or compute data (metrics, traces, logs).
+IMPORTANT: Use an executor action (`execute()` or `execute_outlier_report()`) ONLY to fetch or compute data (metrics, traces, logs).
 Do NOT use executor actions to summarize, conclude, or identify root causes.
 YOU (the controller) are responsible for reasoning over the results and submitting.
 
@@ -325,12 +325,12 @@ class ReactRCAAgent:
 
         execute_api   = {
             k: v for k, v in apis.items()
-            if k in ("execute", "execute_anomaly_report")
+            if k in ("execute", "execute_outlier_report")
         }
         shell_api     = {k: v for k, v in apis.items() if k == "exec_shell"}
         submit_api    = {k: v for k, v in apis.items() if k == "submit"}
         prebuilt_apis = {k: v for k, v in apis.items()
-                         if k not in ("execute", "execute_anomaly_report", "exec_shell", "submit")}
+                         if k not in ("execute", "execute_outlier_report", "exec_shell", "submit")}
         # Merge exec_shell into prebuilt for simplicity
         prebuilt_apis.update(shell_api)
 

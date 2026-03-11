@@ -15,10 +15,10 @@ _EXECUTOR_ACTION_DESCRIPTIONS = {
         "execute(instruction: str) -> str "
         "(returns summarized answer and includes raw output section)"
     ),
-    "execute_anomaly_report": (
-        "execute_anomaly_report(instruction: str) -> str "
-        "(returns structured anomaly report JSON with fields like window_utc, "
-        "kpi_results, sustained_windows, target_timestamp_check; no raw output section)"
+    "execute_outlier_report": (
+        "execute_outlier_report(instruction: str) -> str "
+        "(returns structured outlier report JSON with fields like window_utc, "
+        "kpi_results, outlier_points, sustained_outlier_windows, target_timestamp_check; no raw output section)"
     ),
 }
 
@@ -30,7 +30,7 @@ def build_executor_telemetry_guide(enabled_types=None, executor_actions=None) ->
         enabled_types: frozenset of enabled type strings ("log", "metric", "trace"),
                        or None to include all three.
         executor_actions: list of enabled executor API names (e.g. ["execute"] or
-                          ["execute_anomaly_report"]). Defaults to ["execute"].
+                          ["execute_outlier_report"]). Defaults to ["execute"].
     """
     if enabled_types is None:
         types = list(_TELEMETRY_DESCRIPTIONS.keys())

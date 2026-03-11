@@ -195,8 +195,8 @@ class ReactRCACriticAgent:
         self.problem_desc = problem_desc
         if "execute" in apis:
             self._executor_action_name = "execute"
-        elif "execute_anomaly_report" in apis:
-            self._executor_action_name = "execute_anomaly_report"
+        elif "execute_outlier_report" in apis:
+            self._executor_action_name = "execute_outlier_report"
         else:
             self._executor_action_name = "execute"
 

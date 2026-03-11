@@ -15,13 +15,13 @@ BUILTIN_ACTION_PROFILES: dict[str, dict] = {
     "legacy_execute_only": {
         "include": ["execute", "submit"],
     },
-    # Structured anomaly report API only (no raw output pathway).
-    "anomaly_report_only": {
-        "include": ["execute_anomaly_report", "submit"],
+    # Structured outlier report API only (no raw output pathway).
+    "outlier_report_only": {
+        "include": ["execute_outlier_report", "submit"],
     },
     # Expose both executor APIs.
     "dual_execute": {
-        "include": ["execute", "execute_anomaly_report", "submit"],
+        "include": ["execute", "execute_outlier_report", "submit"],
     },
     # Keep every available action (except explicit excludes).
     "all_actions": {
@@ -33,7 +33,8 @@ BUILTIN_ACTION_PROFILES: dict[str, dict] = {
 
 LEGACY_EXECUTOR_API_ALIAS = {
     "legacy": "legacy_execute_only",
-    "anomaly_report": "anomaly_report_only",
+    "anomaly_report": "outlier_report_only",
+    "outlier_report": "outlier_report_only",
 }
 
 
@@ -116,4 +117,3 @@ def select_agent_actions(
 def list_known_profiles(profile_file: str | None = None) -> list[str]:
     """List available profile names (built-in + optional file)."""
     return sorted(load_profiles(profile_file=profile_file).keys())
-

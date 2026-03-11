@@ -216,21 +216,21 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         )
 
     @executor_action
-    def execute_anomaly_report(self, instruction: str) -> str:
-        """Generate and run Python code, returning a structured anomaly-report JSON.
+    def execute_outlier_report(self, instruction: str) -> str:
+        """Generate and run Python code, returning a structured outlier-report JSON.
 
-        Use this API when you need machine-readable anomaly evidence instead of
+        Use this API when you need machine-readable outlier evidence instead of
         free-form summaries. Output is normalized JSON (no raw output section).
         Kernel state persists across calls, so cached DataFrames/variables can be reused.
 
         Expected top-level JSON fields in the response:
-          - report_type: "anomaly_report"
+          - report_type: "outlier_report"
           - component: target component
           - window_utc: {"start": "...", "end": "..."}
           - baseline_method: baseline strategy used
-          - threshold_rule: anomaly threshold rule used
-          - kpi_results: per-metric anomalies and sustained windows
-          - target_timestamp_check: anomaly status at specific timestamp
+          - threshold_rule: outlier threshold rule used
+          - kpi_results: per-metric outliers and sustained windows
+          - target_timestamp_check: outlier status at specific timestamp
           - data_quality: missing intervals and notes
           - summary: concise interpretation
 
@@ -239,7 +239,7 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
                 component(s), UTC window, baseline/threshold intent, and required outputs.
         """
         return self._run_executor_action(
-            action_name="execute_anomaly_report",
+            action_name="execute_outlier_report",
             instruction=instruction,
         )
 

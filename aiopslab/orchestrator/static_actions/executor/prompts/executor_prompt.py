@@ -33,30 +33,29 @@ Each call returns the **full file path** to a CSV. Read it directly:
 Note: Call telemetry.get_*() only once per data type, then reuse the cached DataFrame variable."""
 
 ANOMALY_METHOD_RULE = """
-## ANOMALY REPORT METHOD:
+## OUTLIER REPORT METHOD:
 
-When the caller asks for anomaly detection or uses the anomaly-report API, use this default method unless the instruction explicitly overrides it:
+When the caller asks for outlier detection or uses the outlier-report API, use this default method unless the instruction explicitly overrides it:
 
 1. Baseline scope:
    - Build the baseline from the full KPI series for that component and KPI BEFORE filtering to the target incident window.
    - Never compute thresholds only from the incident window itself.
 
-2. Point anomaly rule:
+2. Point outlier rule:
    - Primary rule: median/MAD.
-   - Positive-direction KPIs: anomalous if value > median + 3*MAD.
-   - Negative-direction KPIs (for example thread_idle): anomalous if value < median - 3*MAD.
+   - Positive-direction KPIs: outlier if value > median + 3*MAD.
+   - Negative-direction KPIs (for example thread_idle): outlier if value < median - 3*MAD.
 
 3. Fallback when MAD == 0 or MAD is undefined:
    - Use IQR = Q3 - Q1 from the same baseline series.
-   - Positive-direction KPIs: anomalous if value > Q3 + 1.5*IQR.
-   - Negative-direction KPIs: anomalous if value < Q1 - 1.5*IQR.
+   - Positive-direction KPIs: outlier if value > Q3 + 1.5*IQR.
+   - Negative-direction KPIs: outlier if value < Q1 - 1.5*IQR.
 
-4. Sustained anomaly rule:
-   - A sustained anomaly window requires at least 3 consecutive anomalous points at the KPI's native sampling interval.
-
-5. Output requirements:
+4. Output requirements:
    - Set baseline_method to the actual method used, e.g. "global median/MAD with IQR fallback".
-   - Set threshold_rule to the actual rule used, e.g. "positive KPI: value > median + 3*MAD; negative KPI: value < median - 3*MAD; fallback: IQR 1.5x; sustained >=3 consecutive points".
+   - Set threshold_rule to the actual rule used, e.g. "positive KPI: value > median + 3*MAD; negative KPI: value < median - 3*MAD; fallback: IQR 1.5x".
+   - Point outliers are sufficient evidence to report statistical deviation; do not require a sustained-run criterion unless the instruction explicitly asks for one.
+   - If the instruction asks for sustained windows, report them separately and follow the user-specified minimum run length.
    - If a fallback was used for a KPI, mention it in data_quality.notes or summary.
 """
 
@@ -90,15 +89,15 @@ ANOMALY_REPORT_SUMMARY_TEMPLATE = """The code execution is successful. The execu
 
 {result}
 
-Convert this into a structured anomaly report.
-Apply this anomaly filtering method when interpreting the result:
+Convert this into a structured outlier report.
+Apply this outlier filtering method when interpreting the result:
 
 {anomaly_method_rule}
 
 Return ONLY one valid JSON object (no markdown, no code fences, no extra text),
 using this exact top-level schema:
 {{
-  "report_type": "anomaly_report",
+  "report_type": "outlier_report",
   "component": "<component or empty>",
   "window_utc": {{"start": "<YYYY-MM-DD HH:MM:SS or empty>", "end": "<YYYY-MM-DD HH:MM:SS or empty>"}},
   "baseline_method": "<method used or unknown>",
@@ -107,17 +106,17 @@ using this exact top-level schema:
     {{
       "metric": "<name>",
       "sample_interval_sec": <number or null>,
-      "anomaly_points": [
+      "outlier_points": [
         {{"timestamp_utc": "<YYYY-MM-DD HH:MM:SS>", "value": <number or null>, "score": <number or null>, "flag": true}}
       ],
-      "sustained_windows": [
+      "sustained_outlier_windows": [
         {{"start_utc": "<YYYY-MM-DD HH:MM:SS>", "end_utc": "<YYYY-MM-DD HH:MM:SS>", "max_score": <number or null>}}
       ]
     }}
   ],
   "target_timestamp_check": {{
     "timestamp_utc": "<YYYY-MM-DD HH:MM:SS or empty>",
-    "anomalous_metrics": ["<metric>", "..."]
+    "outlier_metrics": ["<metric>", "..."]
   }},
   "data_quality": {{
     "missing_minutes_utc": ["<YYYY-MM-DD HH:MM:SS>", "..."],
@@ -129,8 +128,9 @@ using this exact top-level schema:
 Rules:
 - Keep missing/unknown fields as empty string, empty list, or null (never omit keys).
 - Use UTC timestamps exactly as shown in the result when possible.
-- If no anomalies are found, return empty anomaly lists and explain in summary.
-- Prefer the anomaly method above over ad-hoc thresholds.
+- If no outliers are found, return empty outlier lists and explain in summary.
+- Treat outlier detection as statistical evidence only; do not claim that an outlier alone proves a fault.
+- Prefer the outlier method above over ad-hoc thresholds.
 - Do not invent values not present in the execution result."""
 
 LEGACY_CONCLUSION_TEMPLATE = """{answer}
@@ -150,7 +150,7 @@ PROMPT_SPECS = {
         "structured_output": False,
         "conclusion_template": LEGACY_CONCLUSION_TEMPLATE,
     },
-    "execute_anomaly_report": {
+    "execute_outlier_report": {
         "rule": "\n\n".join([COMMON_RULE, ANOMALY_METHOD_RULE.strip()]),
         "system_template": BASE_SYSTEM_TEMPLATE,
         "code_format": CODE_FORMAT,

@@ -214,7 +214,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--executor-api",
         type=str,
-        choices=["legacy", "anomaly_report"],
+        choices=["legacy", "anomaly_report", "outlier_report"],
         default=None,
         help=argparse.SUPPRESS,
     )
