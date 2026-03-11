@@ -41,7 +41,7 @@ from clients.agents.deepdive1.prompts import (
     EXPAND_PROMPT_TEMPLATE,
     SYSTEM_TEMPLATE,
     ACTION_LIST_TEMPLATE,
-    EXECUTE_SECTION,
+    ANALYSIS_API_SECTION,
     FORCE_SUBMIT_TEMPLATE,
 )
 
@@ -308,9 +308,30 @@ class DeepDiveAgent1:
         self._possible_rca_cand: str = ""
         self._dataset_notes: str = ""
         self._reasons_list: list[str] = []
+        self.exploration_prompt: str = EXPLORATION_PROMPT
+        self.deepdive_prompt_template: str = DEEPDIVE_PROMPT_TEMPLATE
+        self.expand_prompt_template: str = EXPAND_PROMPT_TEMPLATE
+        self.system_template: str = SYSTEM_TEMPLATE
 
         # Internal trajectory for debugging/analysis
         self._agent_trajectory: list[dict] = []
+
+    def configure_prompts(
+        self,
+        exploration_prompt: str | None = None,
+        deepdive_prompt_template: str | None = None,
+        expand_prompt_template: str | None = None,
+        system_template: str | None = None,
+    ) -> None:
+        """Override prompt templates at runtime (e.g., experiments-side prompt files)."""
+        if exploration_prompt is not None:
+            self.exploration_prompt = exploration_prompt
+        if deepdive_prompt_template is not None:
+            self.deepdive_prompt_template = deepdive_prompt_template
+        if expand_prompt_template is not None:
+            self.expand_prompt_template = expand_prompt_template
+        if system_template is not None:
+            self.system_template = system_template
 
     # ------------------------------------------------------------------
     # Initialization
@@ -339,18 +360,21 @@ class DeepDiveAgent1:
             self._reasons_list = reasons
 
         # Build action list
-        execute_api = {k: v for k, v in apis.items() if k == "execute"}
+        analysis_apis = {
+            k: v for k, v in apis.items()
+            if k in ("execute", "execute_anomaly_report")
+        }
         submit_api = {k: v for k, v in apis.items() if k == "submit"}
         prebuilt_apis = {k: v for k, v in apis.items()
-                         if k not in ("execute", "exec_shell", "submit")}
+                         if k not in ("execute", "execute_anomaly_report", "exec_shell", "submit")}
 
-        execute_section = (
-            EXECUTE_SECTION.format(execute_api=_stringify_apis(execute_api))
-            if execute_api else ""
+        analysis_api_section = (
+            ANALYSIS_API_SECTION.format(analysis_apis=_stringify_apis(analysis_apis))
+            if analysis_apis else ""
         )
         self.action_content = ACTION_LIST_TEMPLATE.format(
             prebuilt_apis=_stringify_apis(prebuilt_apis),
-            execute_section=execute_section,
+            analysis_api_section=analysis_api_section,
             submit_api=_stringify_apis(submit_api),
         )
 
@@ -735,7 +759,7 @@ class DeepDiveAgent1:
         """Assemble 3-layer messages for LLM call."""
         # Layer 1: Persistent context (system prompt)
         stage_prompt = self._get_stage_prompt()
-        system_content = SYSTEM_TEMPLATE.format(
+        system_content = self.system_template.format(
             problem_desc=self.problem_desc,
             diagnosis_rules=_DIAGNOSIS_RULES,
             dataset_notes=self._dataset_notes,
@@ -767,12 +791,12 @@ class DeepDiveAgent1:
 
     def _get_stage_prompt(self) -> str:
         if self.current_stage == self.EXPLORATION:
-            return EXPLORATION_PROMPT
+            return self.exploration_prompt
 
         if self.current_stage == self.DEEP_DIVE and self.current_node_id:
             node = self.tree.nodes[self.current_node_id]
             reasons_str = ", ".join(self._reasons_list) if self._reasons_list else "(any)"
-            return DEEPDIVE_PROMPT_TEMPLATE.format(
+            return self.deepdive_prompt_template.format(
                 node_id=node.node_id,
                 component=node.component,
                 time=node.time,
@@ -781,7 +805,7 @@ class DeepDiveAgent1:
 
         if self.current_stage == self.EXPAND and self.current_node_id:
             node = self.tree.nodes[self.current_node_id]
-            return EXPAND_PROMPT_TEMPLATE.format(
+            return self.expand_prompt_template.format(
                 node_id=node.node_id,
                 component=node.component,
                 time=node.time,
@@ -813,7 +837,7 @@ class DeepDiveAgent1:
     def get_system_prompt(self) -> str:
         """Return the current system prompt (Layer 1) for external logging."""
         stage_prompt = self._get_stage_prompt()
-        return SYSTEM_TEMPLATE.format(
+        return self.system_template.format(
             problem_desc=self.problem_desc,
             diagnosis_rules=_DIAGNOSIS_RULES,
             dataset_notes=self._dataset_notes,

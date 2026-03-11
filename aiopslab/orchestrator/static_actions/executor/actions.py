@@ -50,7 +50,7 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         super().__init__(*args, **kwargs)
         self._kernel = None
         self._executor_history = []
-        self._executor_trajectory = []  # [{step, instruction, code, result, success}]
+        self._executor_trajectory = []  # [{step, action, instruction, code, result, success}]
         self._trajectory_path: Path | None = None
         self._notebook_path: Path | None = None
         self._background = ""
@@ -210,6 +210,42 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         Args:
             instruction: Detailed natural language description of what to analyze.
         """
+        return self._run_executor_action(
+            action_name="execute",
+            instruction=instruction,
+            output_mode="legacy",
+        )
+
+    @executor_action
+    def execute_anomaly_report(self, instruction: str) -> str:
+        """Generate and run Python code, returning a structured anomaly-report JSON.
+
+        Use this API when you need machine-readable anomaly evidence instead of
+        free-form summaries. Output is normalized JSON (no raw output section).
+        Kernel state persists across calls, so cached DataFrames/variables can be reused.
+
+        Expected top-level JSON fields in the response:
+          - report_type: "anomaly_report"
+          - component: target component
+          - window_utc: {"start": "...", "end": "..."}
+          - baseline_method: baseline strategy used
+          - threshold_rule: anomaly threshold rule used
+          - kpi_results: per-metric anomalies and sustained windows
+          - target_timestamp_check: anomaly status at specific timestamp
+          - data_quality: missing intervals and notes
+          - summary: concise interpretation
+
+        Args:
+            instruction: Detailed natural language analysis request, including
+                component(s), UTC window, baseline/threshold intent, and required outputs.
+        """
+        return self._run_executor_action(
+            action_name="execute_anomaly_report",
+            instruction=instruction,
+            output_mode="anomaly_report",
+        )
+
+    def _run_executor_action(self, action_name: str, instruction: str, output_mode: str) -> str:
         if self._kernel is None:
             return "Error: Executor not initialized. Call setup_executor() first."
 
@@ -221,6 +257,7 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
             configs=self._configs,
             logger=self._logger,
             max_retries=3,
+            output_mode=output_mode,
         )
 
         if not success:
@@ -229,6 +266,7 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         step = len(self._executor_trajectory) + 1
         self._executor_trajectory.append({
             "step": step,
+            "action": action_name,
             "instruction": instruction,
             "code": code,
             "result": result,

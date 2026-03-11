@@ -30,35 +30,26 @@ def build_telemetry_guide(namespace: str, enabled_types=None) -> str:
     """
     all_types = enabled_types is None
 
-    fetch_parts, read_parts, examples = [], [], []
-
+    data_types = []
     if all_types or "log" in enabled_types:
-        fetch_parts.append("get_logs")
-        read_parts.append("read_logs")
-        examples.append(f'get_logs("{namespace}") or get_logs("{namespace}", "<service>")')
+        data_types.append("- Logs: system and application log records")
     if all_types or "metric" in enabled_types:
-        fetch_parts.append("get_metrics")
-        read_parts.append("read_metrics")
-        examples.append(f'get_metrics("{namespace}")')
+        data_types.append("- Metrics: time-series performance metrics")
     if all_types or "trace" in enabled_types:
-        fetch_parts.append("get_traces")
-        read_parts.append("read_traces")
-        examples.append(f'get_traces("{namespace}")')
-
-    fetch_cmds = "/".join(fetch_parts) if fetch_parts else "(none)"
-    read_cmds = "/".join(read_parts) if read_parts else "(none)"
-    examples_str = "\n  e.g., ".join(examples)
+        data_types.append("- Traces: distributed tracing data")
 
     lines = [
-        "How to access telemetry data:",
-        f"Step 1 - Fetch: Use {fetch_cmds} to save data locally.",
-    ]
-    if examples_str:
-        lines.append(f"  e.g., {examples_str}")
-    lines += [
-        "Step 2 - Read or Filter:",
-        f'  - {read_cmds}("<path>/file.csv") → returns full file contents',
-        '  - exec_shell("grep <pattern> <path>/file.csv") → filtered results only',
+        "How to analyze telemetry data:",
+        "Use the available APIs to retrieve and analyze telemetry data.",
+        "In each step, provide one clear, atomic API call.",
+        "",
+        "Available telemetry data types for this run:",
+        *(data_types or ["- (none)"]),
+        "",
+        "Guidelines:",
+        "1. Use one API call per response.",
+        "2. Reuse cached results where possible.",
+        "3. Use UTC timestamps consistently.",
         "",
         "Submit your root cause analysis as a JSON dict. Each root cause should be",
         'a numbered key ("1", "2", ...) with the relevant fields:',

@@ -17,7 +17,8 @@ class DeepDivePromptVariantAgent(DeepDiveAgent1):
 
     def _build_messages(self) -> list[dict]:
         stage_prompt = self._get_stage_prompt()
-        system_content = self.SYSTEM_TEMPLATE.format(
+        system_template = getattr(self, "system_template", self.SYSTEM_TEMPLATE)
+        system_content = system_template.format(
             problem_desc=self.problem_desc,
             diagnosis_rules=_DIAGNOSIS_RULES,
             dataset_notes=self._dataset_notes,
@@ -45,13 +46,17 @@ class DeepDivePromptVariantAgent(DeepDiveAgent1):
         return messages
 
     def _get_stage_prompt(self) -> str:
+        exploration_prompt = getattr(self, "exploration_prompt", self.EXPLORATION_PROMPT)
+        deepdive_prompt_template = getattr(self, "deepdive_prompt_template", self.DEEPDIVE_PROMPT_TEMPLATE)
+        expand_prompt_template = getattr(self, "expand_prompt_template", self.EXPAND_PROMPT_TEMPLATE)
+
         if self.current_stage == self.EXPLORATION:
-            return self.EXPLORATION_PROMPT
+            return exploration_prompt
 
         if self.current_stage == self.DEEP_DIVE and self.current_node_id:
             node = self.tree.nodes[self.current_node_id]
             reasons_str = ", ".join(self._reasons_list) if self._reasons_list else "(any)"
-            return self.DEEPDIVE_PROMPT_TEMPLATE.format(
+            return deepdive_prompt_template.format(
                 node_id=node.node_id,
                 component=node.component,
                 time=node.time,
@@ -60,7 +65,7 @@ class DeepDivePromptVariantAgent(DeepDiveAgent1):
 
         if self.current_stage == self.EXPAND and self.current_node_id:
             node = self.tree.nodes[self.current_node_id]
-            return self.EXPAND_PROMPT_TEMPLATE.format(
+            return expand_prompt_template.format(
                 node_id=node.node_id,
                 component=node.component,
                 time=node.time,
@@ -70,7 +75,8 @@ class DeepDivePromptVariantAgent(DeepDiveAgent1):
 
     def get_system_prompt(self) -> str:
         stage_prompt = self._get_stage_prompt()
-        return self.SYSTEM_TEMPLATE.format(
+        system_template = getattr(self, "system_template", self.SYSTEM_TEMPLATE)
+        return system_template.format(
             problem_desc=self.problem_desc,
             diagnosis_rules=_DIAGNOSIS_RULES,
             dataset_notes=self._dataset_notes,

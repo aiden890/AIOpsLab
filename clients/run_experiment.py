@@ -47,6 +47,11 @@ from aiopslab.orchestrator.static_orchestrator import StaticOrchestrator
 from aiopslab.orchestrator.static_actions.rca_executor import StaticRCAActionsWithExecutor
 from clients.openrca_rca.prompts import get_basic_prompt
 from clients.openrca_rca.prompts.telemetry_guide import build_executor_telemetry_guide, build_telemetry_guide
+from clients.openrca_rca.action_profiles import (
+    list_known_profiles,
+    resolve_profile_name,
+    select_agent_actions,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -352,7 +357,49 @@ def parse_args():
                         help="Experiment identifier (used as results subdirectory)")
     parser.add_argument("--start-index", type=int, default=0,
                         help="Skip the first N problems (default: 0)")
-    return parser.parse_args()
+    parser.add_argument(
+        "--action-profile",
+        type=str,
+        default=None,
+        help="Agent action profile name (built-in or from --action-profile-file). Default: legacy_execute_only.",
+    )
+    parser.add_argument(
+        "--action-profile-file",
+        type=str,
+        default=None,
+        help="Optional JSON file defining/overriding action profiles.",
+    )
+    # Backward-compatible alias for older scripts.
+    parser.add_argument(
+        "--executor-api",
+        type=str,
+        choices=["legacy", "anomaly_report"],
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--list-action-profiles",
+        action="store_true",
+        help="List available action profiles and exit.",
+    )
+    args = parser.parse_args()
+
+    if args.list_action_profiles:
+        for name in list_known_profiles(profile_file=args.action_profile_file):
+            print(name)
+        raise SystemExit(0)
+
+    args.action_profile = resolve_profile_name(
+        action_profile=args.action_profile,
+        executor_api_legacy=args.executor_api,
+    )
+    known = set(list_known_profiles(profile_file=args.action_profile_file))
+    if args.action_profile not in known:
+        parser.error(
+            f"Unknown action profile '{args.action_profile}'. "
+            f"Known profiles: {', '.join(sorted(known))}"
+        )
+    return args
 
 
 if __name__ == "__main__":
@@ -388,6 +435,7 @@ if __name__ == "__main__":
             "agent": agent_name,
             "model": model_name,
             "eval_id": args.eval_id,
+            "action_profile": args.action_profile,
             "total_problems": len(problem_ids),
             "problems_file": args.problems_file,
         },
@@ -395,6 +443,7 @@ if __name__ == "__main__":
 
     logger.info(f"Experiment: {args.eval_id}")
     logger.info(f"Agent: {args.agent} | Model: {model_name}")
+    logger.info(f"Action profile: {args.action_profile}")
     logger.info(f"Running {len(problem_ids)} problems")
     logger.info(f"Results: {experiment_dir}\n")
 
@@ -445,7 +494,7 @@ if __name__ == "__main__":
                 use_hypothesis = dataset_config.get("hypothesis", {}).get("enable", False)
 
                 actions = StaticRCAActionsWithExecutor(
-                    container_name=problem.app.get_container_name(),
+                    base_path=str(problem.app.get_host_telemetry_path()),
                     possible_root_causes=dataset_config.get("possible_root_causes"),
                     telemetry_flags=dataset_config.get("telemetry"),
                     use_executor=use_executor,
@@ -473,10 +522,18 @@ if __name__ == "__main__":
                 problem.actions = actions
 
                 all_apis = problem.get_available_actions()
-                apis = {k: v for k, v in all_apis.items() if k in ("execute", "submit")}
+                apis, _profile_cfg = select_agent_actions(
+                    all_apis=all_apis,
+                    action_profile=args.action_profile,
+                    profile_file=args.action_profile_file,
+                )
 
                 enabled_types = getattr(actions, "enabled_telemetry_types", None)
-                problem.telemetry_guide = build_executor_telemetry_guide(enabled_types)
+                executor_actions = [k for k in apis.keys() if k.startswith("execute")]
+                problem.telemetry_guide = build_executor_telemetry_guide(
+                    enabled_types,
+                    executor_actions=executor_actions,
+                )
                 problem_desc = problem.get_task_description()
 
                 possible_rca = dataset_config.get("possible_root_causes")
@@ -506,6 +563,7 @@ if __name__ == "__main__":
                     orchestrator._system_message = agent.history[0]["content"]
                 else:
                     orchestrator._system_message = ""
+                orchestrator._problem_init_info = (problem_desc, instructs, apis)
 
                 # Link trajectories
                 orchestrator.session.extra["executor_trajectory"] = actions._executor_trajectory

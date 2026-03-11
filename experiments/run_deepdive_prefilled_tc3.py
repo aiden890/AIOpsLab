@@ -4,7 +4,6 @@ This script:
 1) Treats EXPLORATION as pre-completed using fixed graph snapshots.
 2) Selects the first 3 telecom tasks from a 30-task list.
 3) Runs Deep Dive agent and saves:
-   - prompt_used.txt
    - result_01_*.json
    - result_02_*.json
    - result_03_*.json
@@ -17,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ast
+import importlib.util
 import json
 import logging
 import os
@@ -38,6 +39,11 @@ from clients.run_experiment import (
     load_candidates_for_task,
     classify_criteria,
     load_problems_file,
+)
+from clients.openrca_rca.action_profiles import (
+    list_known_profiles,
+    resolve_profile_name,
+    select_agent_actions,
 )
 
 logger = logging.getLogger("deepdive_prefilled_tc3")
@@ -184,8 +190,55 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=40)
     parser.add_argument("--k", type=int, default=None, help="Experiment index. Auto-increment if omitted.")
     parser.add_argument("--base-dir", type=str, default="experiments", help="Base directory for exp_k.")
+    parser.add_argument(
+        "--prompt-file",
+        type=str,
+        default="experiments/prompt_presets/deepdive_tc3_prompt_exp01.py",
+        help="Python prompt file loaded from experiments directory.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Create exp directory/metadata only.")
-    return parser.parse_args()
+    parser.add_argument("--no-wandb", action="store_true", help="Disable W&B logging (default is enabled).")
+    parser.add_argument(
+        "--action-profile",
+        type=str,
+        default=None,
+        help="Agent action profile name (built-in or from --action-profile-file). Default: legacy_execute_only.",
+    )
+    parser.add_argument(
+        "--action-profile-file",
+        type=str,
+        default=None,
+        help="Optional JSON file defining/overriding action profiles.",
+    )
+    # Backward-compatible alias for older scripts.
+    parser.add_argument(
+        "--executor-api",
+        type=str,
+        choices=["legacy", "anomaly_report"],
+        default=None,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--list-action-profiles",
+        action="store_true",
+        help="List available action profiles and exit.",
+    )
+    args = parser.parse_args()
+    if args.list_action_profiles:
+        for name in list_known_profiles(profile_file=args.action_profile_file):
+            print(name)
+        raise SystemExit(0)
+    args.action_profile = resolve_profile_name(
+        action_profile=args.action_profile,
+        executor_api_legacy=args.executor_api,
+    )
+    known = set(list_known_profiles(profile_file=args.action_profile_file))
+    if args.action_profile not in known:
+        parser.error(
+            f"Unknown action profile '{args.action_profile}'. "
+            f"Known profiles: {', '.join(sorted(known))}"
+        )
+    return args
 
 
 def make_experiment_dir(base_dir: Path, k: int | None) -> tuple[int, Path]:
@@ -233,24 +286,155 @@ def tc_breakdown(results: dict) -> dict:
     }
 
 
-def load_or_init_prompt_file(exp_dir: Path) -> str:
-    prompt_path = exp_dir / "prompt_used.txt"
-    if prompt_path.exists():
-        return prompt_path.read_text(encoding="utf-8")
-
-    default_prompt = (
-        "# Deep Dive Prompt Input\n"
-        "# 이 파일 내용이 모든 대상 task의 dataset_notes로 주입됩니다.\n"
-        "# Exploration은 prefill 그래프를 사용하므로, 아래에는 Deep Dive 기준/정책을 작성하세요.\n\n"
-        "[GLOBAL_POLICY]\n"
-        "- Use UTC for all time expressions.\n"
-        "- Validate each claim with concrete metric/trace evidence.\n"
-        "- Prefer reusable cached tables before issuing new execute queries.\n"
-        "- For candidate time, inspect at least T-5m to T+5m window.\n"
-        "- Output verdict only when evidence table has both supporting and counter evidence.\n"
+def sanitize_problem_description(text: str) -> str:
+    """Remove misleading static-dataset boilerplate from problem description."""
+    drop_prefixes = (
+        "Service Details:",
+        "Service Name:",
+        "Namespace:",
+        "Description:",
+        "Supported Operations:",
     )
-    prompt_path.write_text(default_prompt, encoding="utf-8")
-    return default_prompt
+    kept: list[str] = []
+    blank_run = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if any(stripped.startswith(p) for p in drop_prefixes):
+            continue
+        if not stripped:
+            blank_run += 1
+            if blank_run <= 1:
+                kept.append("")
+            continue
+        blank_run = 0
+        kept.append(line.rstrip())
+    return "\n".join(kept).strip() + "\n"
+
+
+def _parse_scoring_points_obj(scoring_points_raw):
+    if isinstance(scoring_points_raw, dict):
+        return scoring_points_raw
+    if not isinstance(scoring_points_raw, str):
+        return None
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            obj = parser(scoring_points_raw)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    return None
+
+
+def extract_gt_single_candidate(problem) -> dict:
+    """Extract one GT candidate (component/time) from problem scoring points."""
+    raw = getattr(problem, "scoring_points", None)
+    obj = _parse_scoring_points_obj(raw)
+
+    comp = ""
+    when = ""
+    if isinstance(obj, dict):
+        first_item = None
+        if "1" in obj and isinstance(obj["1"], dict):
+            first_item = obj["1"]
+        else:
+            for v in obj.values():
+                if isinstance(v, dict):
+                    first_item = v
+                    break
+        if isinstance(first_item, dict):
+            comp = (
+                first_item.get("root cause component")
+                or first_item.get("component")
+                or ""
+            )
+            when = (
+                first_item.get("root cause occurrence datetime")
+                or first_item.get("root cause occurrence time")
+                or first_item.get("time")
+                or ""
+            )
+
+    raw_text = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+    if not comp:
+        patterns = [
+            r"root cause component[\"']?\s*[:=]\s*[\"']([^\"'\n]+)",
+            r"The only predicted root cause component is ([^\n]+)",
+            r"The \d+-th predicted root cause component is ([^\n]+)",
+        ]
+        for pat in patterns:
+            m_comp = re.search(pat, raw_text, re.IGNORECASE)
+            if m_comp:
+                comp = m_comp.group(1).strip()
+                break
+    if not when:
+        m_time = re.search(r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})", raw_text)
+        if m_time:
+            when = m_time.group(1).strip()
+
+    # Fallback to query_info faults if scoring_points parsing is incomplete.
+    if not comp or not when:
+        qi = getattr(getattr(problem, "app", None), "query_info", None)
+        faults = getattr(qi, "faults", None) if qi else None
+        if isinstance(faults, list) and faults:
+            f0 = faults[0]
+            if not comp:
+                comp = str(f0.get("component", "")).strip()
+            if not when:
+                when = str(f0.get("datetime", "")).strip()
+
+    if not comp or not when:
+        raise RuntimeError(
+            f"Failed to extract GT single candidate from scoring_points: component='{comp}', time='{when}'"
+        )
+
+    return {"component": comp, "peak_time": when}
+
+
+def extract_gt_single_candidate_from_candidates(dataset_key: str, problem_id: str) -> dict | None:
+    """Prefer GT candidate from experiments/candidates/*_top3_candidates.json."""
+    row_index = problem_id.rsplit("-", 1)[-1]
+    cands = load_candidates_for_task(dataset_key, row_index)
+    if not cands:
+        return None
+
+    gt = next((c for c in cands if c.get("is_gt") is True), None)
+    if gt is None:
+        gt = next((c for c in cands if int(c.get("rank", 9999)) == 1), None)
+    if gt is None and cands:
+        gt = cands[0]
+    if not gt:
+        return None
+
+    component = str(gt.get("component", "")).strip()
+    peak_time = str(gt.get("peak_time", gt.get("time", ""))).strip()
+    if not component or not peak_time:
+        return None
+    return {"component": component, "peak_time": peak_time}
+
+
+def load_prompt_module_from_file(prompt_file: Path):
+    if not prompt_file.exists():
+        raise FileNotFoundError(f"Prompt file not found: {prompt_file}")
+    spec = importlib.util.spec_from_file_location("deepdive_exp_prompt", str(prompt_file))
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load prompt spec from: {prompt_file}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def apply_prompt_overrides(agent, prompt_module) -> None:
+    """Override stage prompts from an experiments-side Python file."""
+    if not hasattr(agent, "configure_prompts"):
+        raise TypeError("Selected agent does not support runtime prompt overrides.")
+
+    agent.configure_prompts(
+        exploration_prompt=getattr(prompt_module, "EXPLORATION_PROMPT", None),
+        deepdive_prompt_template=getattr(prompt_module, "DEEPDIVE_PROMPT_TEMPLATE", None),
+        expand_prompt_template=getattr(prompt_module, "EXPAND_PROMPT_TEMPLATE", None),
+        system_template=getattr(prompt_module, "SYSTEM_TEMPLATE", None),
+    )
 
 
 def prepare_problem(
@@ -258,13 +442,16 @@ def prepare_problem(
     agent_type: str,
     api_config: str,
     orchestrator: StaticOrchestrator,
-    prompt_input_text: str,
+    prompt_module,
+    action_profile: str = "legacy_execute_only",
+    action_profile_file: str | None = None,
 ):
     dataset_key = extract_dataset_key(problem_id)
     if dataset_key not in EXPLORATION_SNAPSHOTS:
         raise ValueError(f"No exploration snapshot configured for dataset: {dataset_key}")
 
     agent = create_agent(agent_type, api_config)
+    apply_prompt_overrides(agent, prompt_module)
     agent_name = get_agent_name(agent_type)
     orchestrator.register_agent(agent, name=agent_name)
 
@@ -276,7 +463,7 @@ def prepare_problem(
     basic_prompt = get_basic_prompt(dataset_key)
 
     actions = StaticRCAActionsWithExecutor(
-        container_name=problem.app.get_container_name(),
+        base_path=str(problem.app.get_host_telemetry_path()),
         possible_root_causes=dataset_config.get("possible_root_causes"),
         telemetry_flags=dataset_config.get("telemetry"),
         use_executor=dataset_config.get("executor", {}).get("enable", True),
@@ -301,14 +488,24 @@ def prepare_problem(
     problem.actions = actions
 
     all_apis = problem.get_available_actions()
-    apis = {k: v for k, v in all_apis.items() if k in ("execute", "submit")}
+    apis, _profile_cfg = select_agent_actions(
+        all_apis=all_apis,
+        action_profile=action_profile,
+        profile_file=action_profile_file,
+    )
 
     enabled_types = getattr(actions, "enabled_telemetry_types", None)
-    problem.telemetry_guide = build_executor_telemetry_guide(enabled_types)
-    problem_desc = problem.get_task_description()
+    executor_actions = [k for k in apis.keys() if k.startswith("execute")]
+    problem.telemetry_guide = build_executor_telemetry_guide(
+        enabled_types,
+        executor_actions=executor_actions,
+    )
+    problem_desc = sanitize_problem_description(problem.get_task_description())
 
-    row_index = problem_id.rsplit("-", 1)[-1]
-    candidates = load_candidates_for_task(dataset_key, row_index)
+    gt_candidate = extract_gt_single_candidate_from_candidates(dataset_key, problem_id)
+    if gt_candidate is None:
+        gt_candidate = extract_gt_single_candidate(problem)
+    candidates = [gt_candidate]
 
     snapshot = EXPLORATION_SNAPSHOTS[dataset_key]
     agent.init_context(
@@ -316,24 +513,28 @@ def prepare_problem(
         instructs,
         apis,
         possible_rca=dataset_config.get("possible_root_causes"),
-        dataset_notes=prompt_input_text,
+        dataset_notes="",
         candidates=candidates,
         prefilled_exploration=snapshot,
         dataset_key=dataset_key,
     )
 
     orchestrator._system_message = agent.get_system_prompt()
+    orchestrator._problem_init_info = (problem_desc, instructs, apis)
     orchestrator.session.extra["executor_trajectory"] = actions._executor_trajectory
     if hasattr(agent, "_agent_trajectory"):
         orchestrator.session.extra["agent_trajectory"] = agent._agent_trajectory
 
     orchestrator.sprint.problem_init(problem_desc, instructs, apis)
-    return agent, actions
+    return agent, actions, apis
 
 
 def main() -> None:
     args = parse_args()
-    os.environ.setdefault("USE_WANDB", "false")
+    use_wandb = not args.no_wandb
+    # Make behavior deterministic regardless of parent shell env.
+    # Without explicit init, USE_WANDB=true causes wandb.save() preinit errors.
+    os.environ["USE_WANDB"] = "true" if use_wandb else "false"
 
     problem_ids = load_problems_file(args.problems_file)
     selected = select_telecom_first3_tc(problem_ids)
@@ -343,6 +544,10 @@ def main() -> None:
     eval_id = f"deepdive_tc3_exp_{k:03d}_{run_stamp}"
     orchestrator_root = exp_dir / "orchestrator_results"
     orchestrator_root.mkdir(parents=True, exist_ok=True)
+    prompt_file = Path(args.prompt_file)
+    if not prompt_file.is_absolute():
+        prompt_file = (Path.cwd() / prompt_file).resolve()
+    prompt_module = load_prompt_module_from_file(prompt_file)
 
     meta = {
         "experiment_index": k,
@@ -353,20 +558,22 @@ def main() -> None:
         "problems_file": args.problems_file,
         "selected_problems": selected,
         "notes": "Exploration is prefilled from fixed graph snapshots; Deep Dive starts immediately.",
-        "prompt_input_file": "prompt_used.txt",
-        "prompt_injection_target": "dataset_notes",
+        "prompt_file": str(prompt_file),
+        "use_wandb": use_wandb,
+        "action_profile": args.action_profile,
+        "action_profile_file": args.action_profile_file,
+        "available_apis": [],
     }
     (exp_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     (exp_dir / "exploration_snapshots.json").write_text(
         json.dumps(EXPLORATION_SNAPSHOTS, indent=2),
         encoding="utf-8",
     )
-    prompt_input_text = load_or_init_prompt_file(exp_dir)
-
     if args.dry_run:
         print(f"[DRY-RUN] Experiment directory: {exp_dir}")
         print(f"[DRY-RUN] Selected problems: {selected}")
-        print(f"[DRY-RUN] Prompt input file: {exp_dir / 'prompt_used.txt'}")
+        print(f"[DRY-RUN] Prompt file: {prompt_file}")
+        print(f"[DRY-RUN] Action profile: {args.action_profile}")
         return
 
     for idx, pid in enumerate(selected, start=1):
@@ -374,13 +581,29 @@ def main() -> None:
         agent = None
         actions = None
         try:
-            agent, actions = prepare_problem(
+            if use_wandb:
+                orchestrator.init_wandb(
+                    run_name=f"{args.agent}/{eval_id}/{idx:02d}-{pid}",
+                    config={
+                        "agent": args.agent,
+                        "eval_id": eval_id,
+                        "problem_id": pid,
+                        "experiment_dir": str(exp_dir),
+                    },
+                )
+
+            agent, actions, apis = prepare_problem(
                 pid,
                 args.agent,
                 args.api_config,
                 orchestrator,
-                prompt_input_text=prompt_input_text,
+                prompt_module=prompt_module,
+                action_profile=args.action_profile,
+                action_profile_file=args.action_profile_file,
             )
+            if not meta.get("available_apis"):
+                meta["available_apis"] = list(apis.keys())
+                (exp_dir / "run_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
             output = asyncio.run(orchestrator.start_problem(max_steps=args.max_steps))
             results = output.get("results", {})
@@ -407,10 +630,11 @@ def main() -> None:
                 agent.cleanup()
             if actions is not None:
                 actions.cleanup()
+            if use_wandb:
+                orchestrator.finish_wandb()
 
     print(f"\nExperiment directory: {exp_dir}")
     print("Saved files:")
-    print(f"- {exp_dir / 'prompt_used.txt'} (input prompt used)")
     for idx, pid in enumerate(selected, start=1):
         print(f"- {exp_dir / f'result_{idx:02d}_{pid}.json'}")
 

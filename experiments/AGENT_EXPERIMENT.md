@@ -24,9 +24,20 @@ Exploration 단계를 실제 실행하지 않고, 사전 정의된 그래프 스
   --max-steps 40
 ```
 
+프롬프트 로드 위치:
+
+- 기본 로드 파일: `experiments/prompt_presets/deepdive_tc3_prompt.py`
+- 즉, DeepDive 실험 프롬프트는 `clients/.../prompts.py`가 아니라 `experiments` 쪽 프롬프트 파일에서 로드/오버라이드됨
+- 커스텀 프롬프트 파일 사용:
+
+```bash
+.venv/bin/python experiments/run_deepdive_prefilled_tc3.py \
+  --prompt-file experiments/prompt_presets/deepdive_tc3_prompt.py
+```
+
 결과 저장:
 
-- `experiments/exp_{k}/prompt_used.txt` (실험 **입력 프롬프트** 파일; 실행 시 dataset_notes로 주입)
+- `experiments/exp_{k}/prompt_source.py` (템플릿 + task별 DEEP_DIVE 진입 시점의 완성 system prompt)
 - `experiments/exp_{k}/result_01_*.json`
 - `experiments/exp_{k}/result_02_*.json`
 - `experiments/exp_{k}/result_03_*.json`

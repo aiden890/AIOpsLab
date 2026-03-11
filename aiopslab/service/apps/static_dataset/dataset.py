@@ -8,8 +8,8 @@ Architecture:
   1. deploy() starts a Docker container with raw dataset bind-mounted
   2. Runs process_telemetry.py --mode init: loads initial time window (sync)
   3. Runs process_telemetry.py --mode stream: adds data over time (background)
-  4. Processed telemetry stored at /agent/telemetry/ inside container
-  5. Agent actions read from the container via `docker exec` (DockerStaticApp)
+  4. Processed telemetry stored at /agent/telemetry/ and bind-mounted to host
+  5. Agent actions still read from the running container unless a local-reader path is used
 """
 
 from aiopslab.service.apps.base import Application
@@ -19,6 +19,7 @@ from pathlib import Path
 import json
 import os
 import tempfile
+import time
 import pandas as pd
 
 
@@ -76,6 +77,8 @@ class StaticDataset(Application):
         # Docker client
         self.docker = Docker()
         self.docker_deploy_path = TARGET_MICROSERVICES / "static_dataset"
+        self.telemetry_host_root = BASE_PARENT_DIR / ".cache" / "static_dataset_telemetry"
+        self.telemetry_host_root.mkdir(parents=True, exist_ok=True)
 
         # Dataset path (where raw CSV files live)
         # Resolve relative paths against project root
@@ -177,6 +180,46 @@ class StaticDataset(Application):
         """Return the Docker container name for this dataset."""
         return f"static-dataset-{self.namespace}"
 
+    def get_host_telemetry_path(self) -> Path:
+        """Return host path where processed telemetry for this namespace is stored."""
+        return self.telemetry_host_root
+
+    def _expected_output_files(self) -> list[Path]:
+        """Return host output files expected after init for enabled telemetry."""
+        tel = self.dataset_config.get("telemetry", {})
+        mapping = self.dataset_config.get("data_mapping", {})
+        ns_dir = self.telemetry_host_root / self.namespace
+
+        expected: list[Path] = []
+        if tel.get("enable_metric", False):
+            for name in mapping.get("metric_files", []):
+                expected.append(ns_dir / "metrics" / f"{Path(name).stem}.csv")
+        if tel.get("enable_trace", False):
+            for name in mapping.get("trace_files", []):
+                expected.append(ns_dir / "traces" / f"{Path(name).stem}.csv")
+        if tel.get("enable_log", False):
+            for name in mapping.get("log_files", []):
+                expected.append(ns_dir / "logs" / f"{Path(name).stem}.csv")
+        return expected
+
+    def _wait_for_init_outputs(self, timeout: int = 900, poll_interval: float = 2.0):
+        """Block until expected init outputs exist and are non-empty on host."""
+        expected = self._expected_output_files()
+        if not expected:
+            return
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            missing = [p for p in expected if not p.exists() or p.stat().st_size == 0]
+            if not missing:
+                return
+            time.sleep(poll_interval)
+
+        missing_str = ", ".join(str(p) for p in missing)
+        raise TimeoutError(
+            f"Timed out waiting for init telemetry outputs for namespace '{self.namespace}': {missing_str}"
+        )
+
     def deploy(self):
         """Deploy static dataset via Docker.
 
@@ -184,7 +227,7 @@ class StaticDataset(Application):
         2. Start Docker container (detached) with raw dataset + config bind-mounted
         3. Run process_telemetry.py --mode init (synchronous initial window)
         4. Run process_telemetry.py --mode stream (detached background streaming)
-        5. Telemetry is stored inside the container at /agent/telemetry/
+        5. Telemetry is stored at /agent/telemetry/ and persisted on the host
         """
         print(f"Deploying: {self.dataset_config['dataset_name']}")
 
@@ -225,6 +268,8 @@ class StaticDataset(Application):
         )
         if result:
             print(result)
+        self._wait_for_init_outputs()
+        print(f"  Init outputs ready on host: {self.telemetry_host_root / self.namespace}")
 
         # Step 2: Start background streaming (detached — returns immediately)
         print(f"  Starting telemetry stream in background")
@@ -244,6 +289,7 @@ class StaticDataset(Application):
         env = os.environ.copy()
         env["NAMESPACE"] = self.namespace
         env["DATASET_PATH"] = str(self.dataset_path)
+        env["TELEMETRY_HOST_PATH"] = str(self.telemetry_host_root)
         if self._processing_config_path:
             env["PROCESSING_CONFIG"] = self._processing_config_path
         return env

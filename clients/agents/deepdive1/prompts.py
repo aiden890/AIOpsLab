@@ -37,7 +37,8 @@ When not satisfied, set "stage_complete": false.
 
 Important:
 - Even when stage_complete is true, return a valid action.
-- If no additional data retrieval is needed, use execute() with a no-op instruction.
+- If no additional data retrieval is needed, use an available analysis API
+  (`execute()` or `execute_anomaly_report()`) with a no-op instruction.
 
 Response format:
 {{"thought": "...", "action": "...", "args": {{...}}, "stage_complete": false}}
@@ -128,7 +129,7 @@ ACTION_LIST_TEMPLATE = """\
 
 {prebuilt_apis}
 
-{execute_section}\
+{analysis_api_section}\
 
 ## SUBMIT ACTION:
 
@@ -136,10 +137,10 @@ ACTION_LIST_TEMPLATE = """\
 
 """
 
-EXECUTE_SECTION = """\
-## EXECUTOR ACTION (for data retrieval and computation only):
+ANALYSIS_API_SECTION = """\
+## ANALYSIS APIs (for data retrieval and computation only):
 
-{execute_api}
+{analysis_apis}
 
 The Executor generates Python code from your instruction and runs it in a
 stateful IPython kernel. Variables persist across calls — reuse them.
@@ -148,11 +149,14 @@ Before requesting new computations, explicitly ask to reuse already cached
 DataFrames/threshold tables (e.g., prior p95 baselines) whenever applicable.
 Avoid re-fetching or re-computing the same window/component unless needed.
 
-IMPORTANT: Use execute() ONLY to fetch or compute data (metrics, traces, logs).
-Do NOT use execute() to summarize, conclude, or identify root causes.
+IMPORTANT: Use analysis APIs (`execute()` or `execute_anomaly_report()`) ONLY to fetch or compute data (metrics, traces, logs).
+Do NOT use analysis APIs to summarize, conclude, or identify root causes.
 YOU (the controller) are responsible for reasoning over the results and submitting.
 
 """
+
+# Backward-compatible alias for existing imports.
+EXECUTE_SECTION = ANALYSIS_API_SECTION
 
 # ---------------------------------------------------------------------------
 # Summarization & force submit

@@ -50,7 +50,7 @@ class OpenRCABaseTask:
         # swap this out for StaticRCAActionsWithExecutor after deployment.
         executor_cfg = self.app.dataset_config.get("executor", {})
         self._actions = StaticRCAActions(
-            container_name=self.app.get_container_name(),
+            base_path=str(self.app.get_host_telemetry_path()),
             possible_root_causes=self.app.dataset_config.get("possible_root_causes"),
             telemetry_flags=self.app.dataset_config.get("telemetry"),
             use_executor=executor_cfg.get("enable", True),

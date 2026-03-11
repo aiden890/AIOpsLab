@@ -35,253 +35,253 @@
     },
     "2": {
       "ground_truth": {
-        "component": "docker_005",
-        "time": "00:05",
-        "reason": "CPU fault"
+        "component": "db_007",
+        "time": "02:15",
+        "reason": "db connection limit"
       },
       "candidates": [
         {
           "rank": 1,
-          "component": "docker_005",
-          "peak_time": "2020-04-11 00:05:00",
-          "reason": "CPU fault",
+          "component": "db_007",
+          "peak_time": "2020-04-11 02:15:00",
+          "reason": "db connection limit",
           "is_gt": true
         },
         {
           "rank": 2,
-          "component": "os_005",
-          "peak_time": "2020-04-11 00:19:12",
-          "reason": "network delay"
+          "component": "docker_004",
+          "peak_time": "2020-04-11 02:20:58",
+          "reason": "CPU fault"
         },
         {
           "rank": 3,
-          "component": "db_009",
-          "peak_time": "2020-04-11 00:07:11",
-          "reason": "db connection limit"
+          "component": "os_005",
+          "peak_time": "2020-04-11 02:12:50",
+          "reason": "network delay"
         }
       ]
     },
     "4": {
       "ground_truth": {
-        "component": "docker_004",
-        "time": "00:05",
+        "component": "docker_008",
+        "time": "04:40",
         "reason": "CPU fault"
       },
       "candidates": [
         {
           "rank": 1,
-          "component": "docker_004",
-          "peak_time": "2020-04-11 00:05:00",
+          "component": "docker_008",
+          "peak_time": "2020-04-11 04:40:00",
           "reason": "CPU fault",
           "is_gt": true
         },
         {
           "rank": 2,
-          "component": "os_004",
-          "peak_time": "2020-04-11 00:05:00",
-          "reason": "network delay"
+          "component": "db_003",
+          "peak_time": "2020-04-11 04:32:23",
+          "reason": "db connection limit"
         },
         {
           "rank": 3,
-          "component": "db_010",
-          "peak_time": "2020-04-11 00:26:16",
-          "reason": "db connection limit"
+          "component": "db_011",
+          "peak_time": "2020-04-11 04:43:29",
+          "reason": "network delay"
         }
       ]
     },
     "5": {
       "ground_truth": {
-        "component": "docker_003",
-        "time": "00:05",
-        "reason": "CPU fault"
+        "component": "db_003",
+        "time": "05:45",
+        "reason": "db close"
       },
       "candidates": [
         {
           "rank": 1,
-          "component": "docker_003",
-          "peak_time": "2020-04-11 00:05:00",
-          "reason": "CPU fault",
+          "component": "db_003",
+          "peak_time": "2020-04-11 05:45:00",
+          "reason": "db close",
           "is_gt": true
         },
         {
           "rank": 2,
-          "component": "os_003",
-          "peak_time": "2020-04-11 00:07:57",
-          "reason": "network delay"
+          "component": "docker_008",
+          "peak_time": "2020-04-11 05:43:45",
+          "reason": "CPU fault"
         },
         {
           "rank": 3,
-          "component": "db_010",
-          "peak_time": "2020-04-11 00:16:31",
+          "component": "db_008",
+          "peak_time": "2020-04-11 05:58:23",
           "reason": "db connection limit"
         }
       ]
     },
     "8": {
       "ground_truth": {
-        "component": "docker_005",
-        "time": "00:05",
-        "reason": "memory overflow"
+        "component": "os_018",
+        "time": "01:48",
+        "reason": "network delay"
       },
       "candidates": [
         {
           "rank": 1,
-          "component": "docker_005",
-          "peak_time": "2020-04-11 00:05:00",
-          "reason": "memory overflow",
+          "component": "os_018",
+          "peak_time": "2020-05-22 01:48:00",
+          "reason": "network delay",
           "is_gt": true
         },
         {
           "rank": 2,
-          "component": "os_005",
-          "peak_time": "2020-04-11 00:05:51",
-          "reason": "network delay"
+          "component": "db_003",
+          "peak_time": "2020-05-22 01:46:37",
+          "reason": "db connection limit"
         },
         {
           "rank": 3,
-          "component": "db_009",
-          "peak_time": "2020-04-11 00:04:04",
-          "reason": "db connection limit"
+          "component": "os_022",
+          "peak_time": "2020-05-22 01:49:50",
+          "reason": "network loss"
         }
       ]
     },
     "9": {
       "ground_truth": {
-        "component": "docker_001",
-        "time": "00:05",
-        "reason": "memory overflow"
-      },
-      "candidates": [
-        {
-          "rank": 1,
-          "component": "docker_001",
-          "peak_time": "2020-04-11 00:05:00",
-          "reason": "memory overflow",
-          "is_gt": true
-        },
-        {
-          "rank": 2,
-          "component": "os_001",
-          "peak_time": "2020-04-11 00:05:50",
-          "reason": "network delay"
-        },
-        {
-          "rank": 3,
-          "component": "db_007",
-          "peak_time": "2020-04-11 00:14:27",
-          "reason": "db connection limit"
-        }
-      ]
-    },
-    "13": {
-      "ground_truth": {
-        "component": "docker_001",
-        "time": "00:05",
-        "reason": "network delay"
-      },
-      "candidates": [
-        {
-          "rank": 1,
-          "component": "docker_001",
-          "peak_time": "2020-04-11 00:05:00",
-          "reason": "network delay",
-          "is_gt": true
-        },
-        {
-          "rank": 2,
-          "component": "os_001",
-          "peak_time": "2020-04-11 00:05:51",
-          "reason": "network delay"
-        },
-        {
-          "rank": 3,
-          "component": "db_007",
-          "peak_time": "2020-04-11 00:15:27",
-          "reason": "db connection limit"
-        }
-      ]
-    },
-    "19": {
-      "ground_truth": {
         "component": "docker_005",
-        "time": "00:05",
-        "reason": "network delay"
+        "time": "02:18",
+        "reason": "CPU fault"
       },
       "candidates": [
         {
           "rank": 1,
           "component": "docker_005",
-          "peak_time": "2020-04-11 00:05:00",
+          "peak_time": "2020-05-22 02:18:00",
+          "reason": "CPU fault",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "db_002",
+          "peak_time": "2020-05-22 02:01:36",
+          "reason": "db connection limit"
+        },
+        {
+          "rank": 3,
+          "component": "os_019",
+          "peak_time": "2020-05-22 02:00:38",
+          "reason": "network delay"
+        }
+      ]
+    },
+    "13": {
+      "ground_truth": {
+        "component": "os_009",
+        "time": "01:52",
+        "reason": "network loss"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "os_009",
+          "peak_time": "2020-05-23 01:52:00",
+          "reason": "network loss",
+          "is_gt": true
+        },
+        {
+          "rank": 2,
+          "component": "db_003",
+          "peak_time": "2020-05-23 01:44:25",
+          "reason": "db connection limit"
+        },
+        {
+          "rank": 3,
+          "component": "docker_001",
+          "peak_time": "2020-05-23 01:51:18",
+          "reason": "CPU fault"
+        }
+      ]
+    },
+    "19": {
+      "ground_truth": {
+        "component": "os_020",
+        "time": "01:47",
+        "reason": "network delay"
+      },
+      "candidates": [
+        {
+          "rank": 1,
+          "component": "os_020",
+          "peak_time": "2020-05-25 01:47:00",
           "reason": "network delay",
           "is_gt": true
         },
         {
           "rank": 2,
-          "component": "os_005",
-          "peak_time": "2020-04-11 00:05:24",
-          "reason": "network delay"
+          "component": "os_022",
+          "peak_time": "2020-05-25 01:57:23",
+          "reason": "CPU fault"
         },
         {
           "rank": 3,
-          "component": "db_009",
-          "peak_time": "2020-04-11 00:13:39",
+          "component": "db_003",
+          "peak_time": "2020-05-25 01:39:26",
           "reason": "db connection limit"
         }
       ]
     },
     "20": {
       "ground_truth": {
-        "component": "docker_004",
-        "time": "00:05",
-        "reason": "network delay"
+        "component": "os_017",
+        "time": "03:47",
+        "reason": "network loss"
       },
       "candidates": [
         {
           "rank": 1,
-          "component": "docker_004",
-          "peak_time": "2020-04-11 00:05:00",
-          "reason": "network delay",
+          "component": "os_017",
+          "peak_time": "2020-05-25 03:47:00",
+          "reason": "network loss",
           "is_gt": true
         },
         {
           "rank": 2,
-          "component": "os_004",
-          "peak_time": "2020-04-11 00:05:20",
+          "component": "os_022",
+          "peak_time": "2020-05-25 03:48:01",
           "reason": "network delay"
         },
         {
           "rank": 3,
-          "component": "db_010",
-          "peak_time": "2020-04-11 00:07:47",
-          "reason": "db connection limit"
+          "component": "docker_004",
+          "peak_time": "2020-05-25 03:50:57",
+          "reason": "CPU fault"
         }
       ]
     },
     "27": {
       "ground_truth": {
-        "component": "docker_003",
-        "time": "00:05",
-        "reason": "disk fault"
+        "component": "os_001",
+        "time": "04:45",
+        "reason": "network delay"
       },
       "candidates": [
         {
           "rank": 1,
-          "component": "docker_003",
-          "peak_time": "2020-04-11 00:05:00",
-          "reason": "disk fault",
+          "component": "os_001",
+          "peak_time": "2020-05-26 04:45:00",
+          "reason": "network delay",
           "is_gt": true
         },
         {
           "rank": 2,
-          "component": "os_003",
-          "peak_time": "2020-04-11 00:08:33",
-          "reason": "network delay"
+          "component": "db_003",
+          "peak_time": "2020-05-26 04:39:31",
+          "reason": "db connection limit"
         },
         {
           "rank": 3,
-          "component": "db_010",
-          "peak_time": "2020-04-11 00:15:54",
-          "reason": "db connection limit"
+          "component": "docker_003",
+          "peak_time": "2020-05-26 04:44:32",
+          "reason": "CPU fault"
         }
       ]
     }

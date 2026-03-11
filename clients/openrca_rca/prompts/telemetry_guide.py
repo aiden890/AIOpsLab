@@ -1,7 +1,7 @@
 """Agent-specific telemetry access guide for OpenRCA RCA Agent.
 
 Injected into the task description's {telemetry_guide} placeholder.
-Describes how the Controller-Executor architecture accesses telemetry data.
+Describes API-based telemetry access and analysis guidance.
 """
 
 _TELEMETRY_DESCRIPTIONS = {
@@ -10,13 +10,27 @@ _TELEMETRY_DESCRIPTIONS = {
     "trace":  "Traces: distributed tracing data",
 }
 
+_EXECUTOR_ACTION_DESCRIPTIONS = {
+    "execute": (
+        "execute(instruction: str) -> str "
+        "(returns summarized answer and includes raw output section)"
+    ),
+    "execute_anomaly_report": (
+        "execute_anomaly_report(instruction: str) -> str "
+        "(returns structured anomaly report JSON with fields like window_utc, "
+        "kpi_results, sustained_windows, target_timestamp_check; no raw output section)"
+    ),
+}
 
-def build_executor_telemetry_guide(enabled_types=None) -> str:
+
+def build_executor_telemetry_guide(enabled_types=None, executor_actions=None) -> str:
     """Build the executor telemetry guide based on which types are enabled.
 
     Args:
         enabled_types: frozenset of enabled type strings ("log", "metric", "trace"),
                        or None to include all three.
+        executor_actions: list of enabled executor API names (e.g. ["execute"] or
+                          ["execute_anomaly_report"]). Defaults to ["execute"].
     """
     if enabled_types is None:
         types = list(_TELEMETRY_DESCRIPTIONS.keys())
@@ -24,18 +38,30 @@ def build_executor_telemetry_guide(enabled_types=None) -> str:
         types = [t for t in ("log", "metric", "trace") if t in enabled_types]
 
     telemetry_lines = "\n".join(f"- {_TELEMETRY_DESCRIPTIONS[t]}" for t in types)
+    action_names = executor_actions or ["execute"]
+    action_lines = "\n".join(
+        f"- {_EXECUTOR_ACTION_DESCRIPTIONS[name]}"
+        for name in action_names
+        if name in _EXECUTOR_ACTION_DESCRIPTIONS
+    )
+    if not action_lines:
+        action_lines = f"- {_EXECUTOR_ACTION_DESCRIPTIONS['execute']}"
 
     return f"""\
 How to analyze telemetry data:
-You work with an Executor that writes and executes Python code to analyze telemetry data.
-In each step, provide a clear, atomic instruction for the Executor.
+Use the available APIs to retrieve and analyze telemetry data.
+In each step, provide one clear, atomic API call.
 
-The Executor can access:
+Available telemetry data types for this run:
 {telemetry_lines}
 
-Provide one instruction per step. The Executor will:
-1. Generate Python code based on your instruction
-2. Fetch and analyze the telemetry data
+Available analysis APIs for this run:
+{action_lines}
+
+Guidelines:
+1. Use one API call per response.
+2. Reuse cached results/variables when possible to avoid redundant work.
+3. Use UTC timestamps consistently.
 
 When you have completed your analysis, submit your findings:
 ```
@@ -85,17 +111,17 @@ def build_telemetry_guide(condition="all", dataset_key=None) -> str:
 
     return (
         "How to analyze telemetry data:\n"
-        "You work with an Executor that writes and executes Python code to analyze telemetry data.\n"
-        "In each step, provide a clear, atomic instruction for the Executor.\n"
+        "Use the available APIs to retrieve and analyze telemetry data.\n"
+        "In each step, provide one clear, atomic API call.\n"
         "\n"
-        "The Executor can access:\n"
+        "Available telemetry data types for this run:\n"
         + "\n".join(access_items) + "\n"
         + restriction + "\n"
         "\n"
-        "Provide one instruction per step. The Executor will:\n"
-        "1. Generate Python code based on your instruction\n"
-        "2. Fetch and analyze the telemetry data\n"
-        "3. Return a summary of the results\n"
+        "Guidelines:\n"
+        "1. Use one API call per response.\n"
+        "2. Reuse cached results when possible.\n"
+        "3. Use UTC timestamps consistently.\n"
         "\n"
         "When you have completed your analysis, submit your findings:\n"
         "```\n"

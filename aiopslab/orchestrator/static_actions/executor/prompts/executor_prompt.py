@@ -59,7 +59,51 @@ IMPORTANT:
 - Include specific numbers, component names, and timestamps from the results.
 - Keep the summary concise (under 500 words)."""
 
+anomaly_report_template = """The code execution is successful. The execution result is shown below:
+
+{result}
+
+Convert this into a structured anomaly report.
+Return ONLY one valid JSON object (no markdown, no code fences, no extra text),
+using this exact top-level schema:
+{{
+  "report_type": "anomaly_report",
+  "component": "<component or empty>",
+  "window_utc": {{"start": "<YYYY-MM-DD HH:MM:SS or empty>", "end": "<YYYY-MM-DD HH:MM:SS or empty>"}},
+  "baseline_method": "<method used or unknown>",
+  "threshold_rule": "<rule used or unknown>",
+  "kpi_results": [
+    {{
+      "metric": "<name>",
+      "sample_interval_sec": <number or null>,
+      "anomaly_points": [
+        {{"timestamp_utc": "<YYYY-MM-DD HH:MM:SS>", "value": <number or null>, "score": <number or null>, "flag": true}}
+      ],
+      "sustained_windows": [
+        {{"start_utc": "<YYYY-MM-DD HH:MM:SS>", "end_utc": "<YYYY-MM-DD HH:MM:SS>", "max_score": <number or null>}}
+      ]
+    }}
+  ],
+  "target_timestamp_check": {{
+    "timestamp_utc": "<YYYY-MM-DD HH:MM:SS or empty>",
+    "anomalous_metrics": ["<metric>", "..."]
+  }},
+  "data_quality": {{
+    "missing_minutes_utc": ["<YYYY-MM-DD HH:MM:SS>", "..."],
+    "notes": ["<short note>", "..."]
+  }},
+  "summary": "<concise plain-English summary>"
+}}
+
+Rules:
+- Keep missing/unknown fields as empty string, empty list, or null (never omit keys).
+- Use UTC timestamps exactly as shown in the result when possible.
+- If no anomalies are found, return empty anomaly lists and explain in summary.
+- Do not invent values not present in the execution result."""
+
 conclusion_template = """{answer}
 
 --- Raw Output ---
 {result}"""
+
+structured_conclusion_template = """{answer}"""

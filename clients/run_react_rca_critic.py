@@ -169,7 +169,7 @@ if __name__ == "__main__":
             basic_prompt = get_basic_prompt(dataset_key)
 
             actions = StaticRCAActionsWithExecutor(
-                container_name=problem.app.get_container_name(),
+                base_path=str(problem.app.get_host_telemetry_path()),
                 possible_root_causes=dataset_config.get("possible_root_causes"),
                 telemetry_flags=dataset_config.get("telemetry"),
                 use_executor=use_executor,

@@ -7,6 +7,7 @@ Key difference from the original OpenRCA executor: uses the pre-injected
 import re
 import time
 import traceback
+import json
 from datetime import datetime
 
 import tiktoken
@@ -17,12 +18,14 @@ from aiopslab.orchestrator.static_actions.executor.prompts.executor_prompt impor
     system_template,
     code_format,
     summary_template,
+    anomaly_report_template,
     conclusion_template,
+    structured_conclusion_template,
 )
 
 
 def execute_act(instruction, background, history, kernel, configs, logger,
-                max_retries=3):
+                max_retries=3, output_mode: str = "legacy"):
     """Execute an instruction by generating and running Python code.
 
     Args:
@@ -33,6 +36,10 @@ def execute_act(instruction, background, history, kernel, configs, logger,
         configs: LLM API config dict.
         logger: Logger instance.
         max_retries: Max attempts on execution error (default: 3).
+
+    Args:
+        output_mode: "legacy" (summary + raw output) or
+            "anomaly_report" (structured JSON report, no raw output).
 
     Returns:
         tuple: (code, result, success, updated_history)
@@ -125,7 +132,10 @@ def execute_act(instruction, background, history, kernel, configs, logger,
 
                 # Summarize result with LLM
                 history.append({"role": "assistant", "content": code})
-                summary_input = summary_template.format(result=result)
+                if output_mode == "anomaly_report":
+                    summary_input = anomaly_report_template.format(result=result)
+                else:
+                    summary_input = summary_template.format(result=result)
                 if was_truncated:
                     summary_input += (
                         "\n\nWARNING: The output was truncated due to excessive length. "
@@ -137,7 +147,12 @@ def execute_act(instruction, background, history, kernel, configs, logger,
                 logger.debug(f"Brief Answer:\n{answer}")
 
                 history.append({"role": "assistant", "content": answer})
-                result = conclusion_template.format(answer=answer, result=result)
+                if output_mode == "anomaly_report":
+                    # Structured mode: return normalized JSON only (no raw output).
+                    normalized = _normalize_json_response(answer)
+                    result = structured_conclusion_template.format(answer=normalized)
+                else:
+                    result = conclusion_template.format(answer=answer, result=result)
 
                 return code, result, status, history
             else:
@@ -169,3 +184,38 @@ def execute_act(instruction, background, history, kernel, configs, logger,
     err = "The Executor failed to complete the instruction, please re-write a new instruction for Executor."
     history.append({"role": "assistant", "content": err})
     return err, err, True, history
+
+
+def _normalize_json_response(text: str) -> str:
+    """Extract and pretty-print a JSON object from LLM text."""
+    payload = _extract_json_payload(text)
+    try:
+        obj = json.loads(payload)
+        return json.dumps(obj, ensure_ascii=False, indent=2)
+    except Exception:
+        fallback = {
+            "report_type": "anomaly_report",
+            "component": "",
+            "window_utc": {"start": "", "end": ""},
+            "baseline_method": "unknown",
+            "threshold_rule": "unknown",
+            "kpi_results": [],
+            "target_timestamp_check": {"timestamp_utc": "", "anomalous_metrics": []},
+            "data_quality": {"missing_minutes_utc": [], "notes": ["schema_parse_failed"]},
+            "summary": text.strip()[:1000],
+        }
+        return json.dumps(fallback, ensure_ascii=False, indent=2)
+
+
+def _extract_json_payload(text: str) -> str:
+    if not text:
+        return "{}"
+    raw = text.strip()
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return raw[start:end + 1].strip()
+    return raw

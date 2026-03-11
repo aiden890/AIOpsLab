@@ -1,0 +1,22 @@
+"""Experiment-side prompt source for DeepDive TC3 runs.
+
+This file is loaded by experiments/run_deepdive_prefilled_tc3.py and can override:
+- EXPLORATION_PROMPT
+- DEEPDIVE_PROMPT_TEMPLATE
+- EXPAND_PROMPT_TEMPLATE
+- SYSTEM_TEMPLATE
+"""
+
+from clients.agents.deepdive1.prompts import (
+    EXPLORATION_PROMPT as _BASE_EXPLORATION_PROMPT,
+    DEEPDIVE_PROMPT_TEMPLATE as _BASE_DEEPDIVE_PROMPT_TEMPLATE,
+    EXPAND_PROMPT_TEMPLATE as _BASE_EXPAND_PROMPT_TEMPLATE,
+    SYSTEM_TEMPLATE as _BASE_SYSTEM_TEMPLATE,
+)
+
+# Experiment-owned prompt variables.
+# Modify these values in experiments directory for A/B prompt tests.
+EXPLORATION_PROMPT = _BASE_EXPLORATION_PROMPT
+DEEPDIVE_PROMPT_TEMPLATE = _BASE_DEEPDIVE_PROMPT_TEMPLATE
+EXPAND_PROMPT_TEMPLATE = _BASE_EXPAND_PROMPT_TEMPLATE
+SYSTEM_TEMPLATE = _BASE_SYSTEM_TEMPLATE

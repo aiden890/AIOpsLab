@@ -161,7 +161,7 @@ def _trim_history(history: list, max_tokens: int = 120_000) -> list:
 class ReactRCACriticAgent:
     """RCA agent with Critic validation, using original OpenRCA prompt format.
 
-    Only uses execute() for telemetry access and submit() for final answer.
+    Only uses one executor action for telemetry access and submit() for final answer.
     No pre-built actions or hypothesis tracking.
     """
 
@@ -173,6 +173,7 @@ class ReactRCACriticAgent:
         self.step = 0
         self.problem_desc = ""
         self._cand = ""
+        self._executor_action_name = "execute"
         self._critic_trajectory: list[dict] = []
 
     # ------------------------------------------------------------------
@@ -189,9 +190,15 @@ class ReactRCACriticAgent:
     ):
         """Build system prompt matching original OpenRCA controller.py format.
 
-        Only execute() and submit() are exposed to the agent.
+        Only one executor action and submit() are exposed to the agent.
         """
         self.problem_desc = problem_desc
+        if "execute" in apis:
+            self._executor_action_name = "execute"
+        elif "execute_anomaly_report" in apis:
+            self._executor_action_name = "execute_anomaly_report"
+        else:
+            self._executor_action_name = "execute"
 
         # Store candidates for force-submit
         if possible_rca:
@@ -371,13 +378,16 @@ class ReactRCACriticAgent:
                 if completed == "True":
                     return self._force_submit()
 
-                # Return instruction as execute() action for orchestrator
+                # Return instruction as executor action for orchestrator
                 # Escape newlines and quotes so ast.parse can handle it
                 escaped = (instruction
                            .replace('\\', '\\\\')
                            .replace('"', '\\"')
                            .replace('\n', '\\n'))
-                return f'Thought: {instruction}\n```\nexecute("{escaped}")\n```'
+                return (
+                    f'Thought: {instruction}\n'
+                    f'```\n{self._executor_action_name}("{escaped}")\n```'
+                )
 
             except json.JSONDecodeError:
                 logger.warning(f"Step[{self.step}] Instruction JSON parse failed")

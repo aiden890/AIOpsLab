@@ -1,0 +1,13 @@
+{
+  "profiles": {
+    "exp02_anomaly_only": {
+      "include": ["execute", "execute_anomaly_report", "submit"]
+    },
+    "exp02_dual_execute": {
+      "include": ["execute", "execute_anomaly_report", "submit"]
+    },
+    "exp02_strict_anomaly_only": {
+      "include": ["execute_anomaly_report", "submit"]
+    }
+  }
+}
