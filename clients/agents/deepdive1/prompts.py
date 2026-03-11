@@ -60,6 +60,13 @@ Verification checklist:
 6. Reuse existing baselines/thresholds from prior steps first; only recompute if scope changes and state why.
 7. Always inspect at least a ±5 minute window around candidate time T (T-5m to T+5m) before verdict.
 
+Stage boundary rules:
+- DEEP DIVE is for verifying THIS node only: whether (component={component}, time={time}) is a real fault and what local fault reason best explains it.
+- In DEEP DIVE, prioritize same-component evidence and same-host/local corroboration first.
+- Do NOT spend DEEP DIVE steps searching for a deeper upstream/downstream/shared-dependency root cause candidate. That belongs to EXPAND after confirmation.
+- Do NOT branch into backend/dependency traversal merely to look for an earlier cause. Reserve topology-based deeper-cause search for EXPAND.
+- Only reference another component in DEEP DIVE when it is strictly needed to judge whether this node is a false positive, propagated symptom, or locally corroborated fault.
+
 Available reasons: {reasons}
 
 When you have reached a conclusion, include "verdict" in your response:
@@ -83,6 +90,11 @@ Search directions:
 1. Upstream: trace call graph — who calls {component}? Is the caller showing an earlier anomaly?
 2. Downstream: what does {component} depend on? Is a dependency failing?
 3. Time precedence: did any related component show anomalies BEFORE T={time}?
+
+Stage boundary rules:
+- EXPAND is the only stage for topology/dependency traversal aimed at finding a deeper root cause.
+- Use upstream/downstream/shared-resource checks here, not in DEEP DIVE.
+- If you inspect other components mainly to determine whether they caused the confirmed node, that is EXPAND work.
 
 When done, include "expand_result" in your response:
 - Found deeper root: {{"expand_result": {{"found": true, "component": "<name>", "time": "<HH:MM or datetime>"}}}}

@@ -184,6 +184,20 @@ class StaticDataset(Application):
         """Return host path where processed telemetry for this namespace is stored."""
         return self.telemetry_host_root
 
+    def get_raw_dataset_path(self) -> Path:
+        """Return raw dataset root path for direct-read telemetry access."""
+        return self.dataset_path
+
+    def get_default_time_window(self) -> tuple[int | None, int | None]:
+        """Return default UTC window for direct-read mode."""
+        if self.time_remapper:
+            mapping = self.time_remapper.mapping
+            return mapping.get("init_start_original"), mapping.get("init_end_original")
+        if self.query_info:
+            tr = self.query_info.time_range
+            return tr.get("start"), tr.get("end")
+        return None, None
+
     def _expected_output_files(self) -> list[Path]:
         """Return host output files expected after init for enabled telemetry."""
         tel = self.dataset_config.get("telemetry", {})

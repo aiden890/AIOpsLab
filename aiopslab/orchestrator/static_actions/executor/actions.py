@@ -213,7 +213,6 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         return self._run_executor_action(
             action_name="execute",
             instruction=instruction,
-            output_mode="legacy",
         )
 
     @executor_action
@@ -242,10 +241,9 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         return self._run_executor_action(
             action_name="execute_anomaly_report",
             instruction=instruction,
-            output_mode="anomaly_report",
         )
 
-    def _run_executor_action(self, action_name: str, instruction: str, output_mode: str) -> str:
+    def _run_executor_action(self, action_name: str, instruction: str) -> str:
         if self._kernel is None:
             return "Error: Executor not initialized. Call setup_executor() first."
 
@@ -257,7 +255,7 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
             configs=self._configs,
             logger=self._logger,
             max_retries=3,
-            output_mode=output_mode,
+            action_name=action_name,
         )
 
         if not success:

@@ -1,6 +1,6 @@
-"""Executor prompt rules for Python code generation."""
+"""Executor prompt specs keyed by action name."""
 
-rule = """## RULES OF PYTHON CODE WRITING:
+COMMON_RULE = """## RULES OF PYTHON CODE WRITING:
 
 1. Reuse variables as much as possible for execution efficiency since the IPython Kernel is stateful, i.e., variables defined in previous steps can be used in subsequent steps.
 2. Use variable name rather than `print()` to display the execution results since your Python environment is IPython Kernel rather than Python.exe. If you want to display multiple variables, use commas to separate them, e.g. `var1, var2`. IMPORTANT: IPython only captures the result of the **last top-level expression** — expressions inside `if/else` blocks are NOT captured. Always place the final display expression at the top level (outside any `if/else`), or use `print()` inside conditional blocks.
@@ -32,8 +32,39 @@ Each call returns the **full file path** to a CSV. Read it directly:
 
 Note: Call telemetry.get_*() only once per data type, then reuse the cached DataFrame variable."""
 
+ANOMALY_METHOD_RULE = """
+## ANOMALY REPORT METHOD:
 
-system_template = """You are a DevOps assistant for writing Python code to answer DevOps questions. For each question, you need to write Python code to solve it by retrieving and processing telemetry data of the target system. Your generated Python code will be automatically submitted to a IPython Kernel. The execution result output in IPython Kernel will be used as the answer to the question.
+When the caller asks for anomaly detection or uses the anomaly-report API, use this default method unless the instruction explicitly overrides it:
+
+1. Baseline scope:
+   - Build the baseline from the full KPI series for that component and KPI BEFORE filtering to the target incident window.
+   - Never compute thresholds only from the incident window itself.
+
+2. Point anomaly rule:
+   - Primary rule: median/MAD.
+   - Positive-direction KPIs: anomalous if value > median + 3*MAD.
+   - Negative-direction KPIs (for example thread_idle): anomalous if value < median - 3*MAD.
+
+3. Fallback when MAD == 0 or MAD is undefined:
+   - Use IQR = Q3 - Q1 from the same baseline series.
+   - Positive-direction KPIs: anomalous if value > Q3 + 1.5*IQR.
+   - Negative-direction KPIs: anomalous if value < Q1 - 1.5*IQR.
+
+4. Sustained anomaly rule:
+   - A sustained anomaly window requires at least 3 consecutive anomalous points at the KPI's native sampling interval.
+
+5. Output requirements:
+   - Set baseline_method to the actual method used, e.g. "global median/MAD with IQR fallback".
+   - Set threshold_rule to the actual rule used, e.g. "positive KPI: value > median + 3*MAD; negative KPI: value < median - 3*MAD; fallback: IQR 1.5x; sustained >=3 consecutive points".
+   - If a fallback was used for a KPI, mention it in data_quality.notes or summary.
+"""
+
+CODE_FORMAT = """```python
+(YOUR CODE HERE)
+```"""
+
+BASE_SYSTEM_TEMPLATE = """You are a DevOps assistant for writing Python code to answer DevOps questions. For each question, you need to write Python code to solve it by retrieving and processing telemetry data of the target system. Your generated Python code will be automatically submitted to a IPython Kernel. The execution result output in IPython Kernel will be used as the answer to the question.
 
 {rule}
 
@@ -45,11 +76,7 @@ Your response should follow the Python block format below:
 
 {format}"""
 
-code_format = """```python
-(YOUR CODE HERE)
-```"""
-
-summary_template = """The code execution is successful. The execution result is shown below:
+EXECUTE_SUMMARY_TEMPLATE = """The code execution is successful. The execution result is shown below:
 
 {result}
 
@@ -59,11 +86,15 @@ IMPORTANT:
 - Include specific numbers, component names, and timestamps from the results.
 - Keep the summary concise (under 500 words)."""
 
-anomaly_report_template = """The code execution is successful. The execution result is shown below:
+ANOMALY_REPORT_SUMMARY_TEMPLATE = """The code execution is successful. The execution result is shown below:
 
 {result}
 
 Convert this into a structured anomaly report.
+Apply this anomaly filtering method when interpreting the result:
+
+{anomaly_method_rule}
+
 Return ONLY one valid JSON object (no markdown, no code fences, no extra text),
 using this exact top-level schema:
 {{
@@ -99,11 +130,38 @@ Rules:
 - Keep missing/unknown fields as empty string, empty list, or null (never omit keys).
 - Use UTC timestamps exactly as shown in the result when possible.
 - If no anomalies are found, return empty anomaly lists and explain in summary.
+- Prefer the anomaly method above over ad-hoc thresholds.
 - Do not invent values not present in the execution result."""
 
-conclusion_template = """{answer}
+LEGACY_CONCLUSION_TEMPLATE = """{answer}
 
 --- Raw Output ---
 {result}"""
 
-structured_conclusion_template = """{answer}"""
+STRUCTURED_CONCLUSION_TEMPLATE = """{answer}"""
+
+PROMPT_SPECS = {
+    "execute": {
+        "rule": COMMON_RULE,
+        "system_template": BASE_SYSTEM_TEMPLATE,
+        "code_format": CODE_FORMAT,
+        "followup_template": EXECUTE_SUMMARY_TEMPLATE,
+        "followup_template_kwargs": (),
+        "structured_output": False,
+        "conclusion_template": LEGACY_CONCLUSION_TEMPLATE,
+    },
+    "execute_anomaly_report": {
+        "rule": "\n\n".join([COMMON_RULE, ANOMALY_METHOD_RULE.strip()]),
+        "system_template": BASE_SYSTEM_TEMPLATE,
+        "code_format": CODE_FORMAT,
+        "followup_template": ANOMALY_REPORT_SUMMARY_TEMPLATE,
+        "followup_template_kwargs": ("anomaly_method_rule",),
+        "structured_output": True,
+        "conclusion_template": STRUCTURED_CONCLUSION_TEMPLATE,
+    },
+}
+
+
+def get_prompt_spec(action_name: str) -> dict:
+    """Return executor prompt spec for a given action."""
+    return PROMPT_SPECS.get(action_name, PROMPT_SPECS["execute"])

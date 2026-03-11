@@ -14,18 +14,13 @@ import tiktoken
 
 from aiopslab.orchestrator.static_actions.executor.api_router import get_chat_completion
 from aiopslab.orchestrator.static_actions.executor.prompts.executor_prompt import (
-    rule,
-    system_template,
-    code_format,
-    summary_template,
-    anomaly_report_template,
-    conclusion_template,
-    structured_conclusion_template,
+    ANOMALY_METHOD_RULE,
+    get_prompt_spec,
 )
 
 
 def execute_act(instruction, background, history, kernel, configs, logger,
-                max_retries=3, output_mode: str = "legacy"):
+                max_retries=3, action_name: str = "execute"):
     """Execute an instruction by generating and running Python code.
 
     Args:
@@ -37,15 +32,15 @@ def execute_act(instruction, background, history, kernel, configs, logger,
         logger: Logger instance.
         max_retries: Max attempts on execution error (default: 3).
 
-    Args:
-        output_mode: "legacy" (summary + raw output) or
-            "anomaly_report" (structured JSON report, no raw output).
-
     Returns:
         tuple: (code, result, success, updated_history)
     """
     logger.debug("Start execution")
     t1 = datetime.now()
+    prompt_spec = get_prompt_spec(action_name)
+    rule = prompt_spec["rule"]
+    system_template = prompt_spec["system_template"]
+    code_format = prompt_spec["code_format"]
 
     if not history:
         history = [
@@ -132,10 +127,10 @@ def execute_act(instruction, background, history, kernel, configs, logger,
 
                 # Summarize result with LLM
                 history.append({"role": "assistant", "content": code})
-                if output_mode == "anomaly_report":
-                    summary_input = anomaly_report_template.format(result=result)
-                else:
-                    summary_input = summary_template.format(result=result)
+                summary_kwargs = {"result": result}
+                if "anomaly_method_rule" in prompt_spec.get("followup_template_kwargs", ()):
+                    summary_kwargs["anomaly_method_rule"] = ANOMALY_METHOD_RULE
+                summary_input = prompt_spec["followup_template"].format(**summary_kwargs)
                 if was_truncated:
                     summary_input += (
                         "\n\nWARNING: The output was truncated due to excessive length. "
@@ -147,12 +142,11 @@ def execute_act(instruction, background, history, kernel, configs, logger,
                 logger.debug(f"Brief Answer:\n{answer}")
 
                 history.append({"role": "assistant", "content": answer})
-                if output_mode == "anomaly_report":
-                    # Structured mode: return normalized JSON only (no raw output).
+                if prompt_spec["structured_output"]:
                     normalized = _normalize_json_response(answer)
-                    result = structured_conclusion_template.format(answer=normalized)
+                    result = prompt_spec["conclusion_template"].format(answer=normalized)
                 else:
-                    result = conclusion_template.format(answer=answer, result=result)
+                    result = prompt_spec["conclusion_template"].format(answer=answer, result=result)
 
                 return code, result, status, history
             else:

@@ -13,7 +13,7 @@ import os
 import pandas as pd
 
 from aiopslab.utils.actions import action, read, log_action, metric_action, trace_action
-from aiopslab.service.static_app import StaticApp, DockerStaticApp
+from aiopslab.service.static_app import StaticApp, DockerStaticApp, RawStaticApp
 from aiopslab.service.shell import Shell
 
 import re
@@ -36,7 +36,9 @@ class StaticTaskActions:
     """
 
     def __init__(self, container_name: str = None, base_path: str = None,
-                 work_dir: str = None):
+                 work_dir: str = None, raw_dataset_path: str = None,
+                 raw_data_mapping: dict = None, raw_dataset_type: str = None,
+                 default_start_time=None, default_end_time=None):
         """
         Args:
             container_name: Docker container name (production mode).
@@ -45,7 +47,15 @@ class StaticTaskActions:
                       Each parallel run should use a unique work_dir to avoid conflicts.
                       Defaults to cwd if not specified.
         """
-        if container_name:
+        if raw_dataset_path:
+            self.static_app = RawStaticApp(
+                dataset_root=raw_dataset_path,
+                data_mapping=raw_data_mapping or {},
+                dataset_type=raw_dataset_type or "openrca",
+                default_start_time=default_start_time,
+                default_end_time=default_end_time,
+            )
+        elif container_name:
             self.static_app = DockerStaticApp(container_name)
         else:
             self.static_app = StaticApp(base_path or "/agent/telemetry")

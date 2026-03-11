@@ -49,8 +49,13 @@ class OpenRCABaseTask:
         # Runners that need the self-contained executor (e.g. run_react_rca.py)
         # swap this out for StaticRCAActionsWithExecutor after deployment.
         executor_cfg = self.app.dataset_config.get("executor", {})
+        default_start, default_end = self.app.get_default_time_window()
         self._actions = StaticRCAActions(
-            base_path=str(self.app.get_host_telemetry_path()),
+            raw_dataset_path=str(self.app.get_raw_dataset_path()),
+            raw_data_mapping=self.app.dataset_config.get("data_mapping"),
+            raw_dataset_type=self.app.dataset_config.get("dataset_type"),
+            default_start_time=default_start,
+            default_end_time=default_end,
             possible_root_causes=self.app.dataset_config.get("possible_root_causes"),
             telemetry_flags=self.app.dataset_config.get("telemetry"),
             use_executor=executor_cfg.get("enable", True),

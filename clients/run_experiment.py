@@ -494,7 +494,11 @@ if __name__ == "__main__":
                 use_hypothesis = dataset_config.get("hypothesis", {}).get("enable", False)
 
                 actions = StaticRCAActionsWithExecutor(
-                    base_path=str(problem.app.get_host_telemetry_path()),
+                    raw_dataset_path=str(problem.app.get_raw_dataset_path()),
+                    raw_data_mapping=dataset_config.get("data_mapping"),
+                    raw_dataset_type=dataset_config.get("dataset_type"),
+                    default_start_time=problem.app.get_default_time_window()[0],
+                    default_end_time=problem.app.get_default_time_window()[1],
                     possible_root_causes=dataset_config.get("possible_root_causes"),
                     telemetry_flags=dataset_config.get("telemetry"),
                     use_executor=use_executor,
