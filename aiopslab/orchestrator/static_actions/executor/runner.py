@@ -22,7 +22,7 @@ from aiopslab.orchestrator.static_actions.executor.prompts.executor_prompt impor
 
 
 def execute_act(instruction, background, history, kernel, configs, logger,
-                max_retries=3):
+                max_retries=3, summary_injector=None):
     """Execute an instruction by generating and running Python code.
 
     Args:
@@ -113,9 +113,14 @@ def execute_act(instruction, background, history, kernel, configs, logger,
                 logger.debug(f"Execution Result:\n{result}")
                 logger.debug(f"Execution finished. Time cost: {t2 - t1}")
 
+                # Inject fault context before summary (if injector set)
+                summary_result = result
+                if summary_injector is not None:
+                    summary_result = summary_injector(summary_result)
+
                 # Summarize result with LLM
                 history.append({"role": "assistant", "content": code})
-                history.append({"role": "user", "content": summary_template.format(result=result)})
+                history.append({"role": "user", "content": summary_template.format(result=summary_result)})
 
                 answer = get_chat_completion(history, configs)
                 logger.debug(f"Brief Answer:\n{answer}")
@@ -147,6 +152,12 @@ def execute_act(instruction, background, history, kernel, configs, logger,
 
     t2 = datetime.now()
     logger.error(f"Max retries reached. Time cost: {t2 - t1}")
-    err = "The Executor failed to complete the instruction, please re-write a new instruction for Executor."
+    err = (
+        f"The Executor failed to complete the following instruction after {max_retries} attempts:\n\n"
+        f"  \"{instruction}\"\n\n"
+        f"The code generation or execution kept failing. "
+        f"Please re-write a instruction to investigate "
+        f"the same component/topic, or try a different approach."
+    )
     history.append({"role": "assistant", "content": err})
     return err, err, True, history

@@ -36,14 +36,17 @@ def build_telemetry_guide(namespace: str, enabled_types=None) -> str:
         fetch_parts.append("get_logs")
         read_parts.append("read_logs")
         examples.append(f'get_logs("{namespace}") or get_logs("{namespace}", "<service>")')
-    if all_types or "metric" in enabled_types:
-        fetch_parts.append("get_metrics")
-        read_parts.append("read_metrics")
-        examples.append(f'get_metrics("{namespace}")')
-    if all_types or "trace" in enabled_types:
-        fetch_parts.append("get_traces")
-        read_parts.append("read_traces")
-        examples.append(f'get_traces("{namespace}")')
+    # get_metrics / get_traces are internal-only (used by executor);
+    # the controller accesses metric data via get_kpi_peer_graph and execute().
+    if False:  # kept for reference
+        if all_types or "metric" in enabled_types:
+            fetch_parts.append("get_metrics")
+            read_parts.append("read_metrics")
+            examples.append(f'get_metrics("{namespace}")')
+        if all_types or "trace" in enabled_types:
+            fetch_parts.append("get_traces")
+            read_parts.append("read_traces")
+            examples.append(f'get_traces("{namespace}")')
 
     fetch_cmds = "/".join(fetch_parts) if fetch_parts else "(none)"
     read_cmds = "/".join(read_parts) if read_parts else "(none)"
@@ -58,7 +61,7 @@ def build_telemetry_guide(namespace: str, enabled_types=None) -> str:
     lines += [
         "Step 2 - Read or Filter:",
         f'  - {read_cmds}("<path>/file.csv") → returns full file contents',
-        '  - exec_shell("grep <pattern> <path>/file.csv") → filtered results only',
+        '  - execute("Instruction") → you can make code by your instruction',
         "",
         "Submit your root cause analysis as a JSON dict. Each root cause should be",
         'a numbered key ("1", "2", ...) with the relevant fields:',
@@ -106,7 +109,6 @@ class OpenRCATask(Task):
             {app_summary}
 
             Namespace: {namespace}
-            Available services/components: {services}
 
             {instruction}
 
@@ -157,6 +159,7 @@ class OpenRCATask(Task):
         if self.actions is None:
             return {}
         enabled_types = getattr(self.actions, "enabled_telemetry_types", None)
+        viz_enabled = getattr(self.actions, "enable_visualization_tool", True)
         result = {}
         for method in dir(self.actions):
             fn = getattr(self.actions, method)
@@ -171,6 +174,8 @@ class OpenRCATask(Task):
                         continue
                 elif telemetry_type is not None and telemetry_type not in enabled_types:
                     continue
+            if not viz_enabled and getattr(fn, "is_visualization", False):
+                continue
             sig = inspect.signature(fn)
             doc = (fn.__doc__ or "").strip()
             result[method] = f"{sig}\n{doc}"
@@ -186,10 +191,11 @@ class OpenRCATask(Task):
 
     def eval(self, soln: Any, trace: list[SessionItem], duration: float):
         soln_str = json.dumps(soln) if not isinstance(soln, str) else soln
-        passing, failing, score = openrca_evaluate(soln_str, self.scoring_points)
+        passing, failing, score, detail = openrca_evaluate(soln_str, self.scoring_points)
         self.add_result("score", score)
         self.add_result("passing_criteria", passing)
         self.add_result("failing_criteria", failing)
+        self.add_result("eval_detail", detail)
         self.add_result("ground_truth", self.scoring_points)
         query_info = getattr(self.app, "query_info", None)
         if query_info and query_info.faults:

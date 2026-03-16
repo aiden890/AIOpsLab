@@ -15,6 +15,7 @@ from aiopslab.orchestrator.static_problems.openrca import (
     OpenRCAMarketCB1Problem,
     OpenRCAMarketCB2Problem,
 )
+from aiopslab.orchestrator.static_problems.re2tt import RE2TTProblem
 
 # Dataset configurations: config_key -> (relative dataset path, problem class)
 OPENRCA_DATASETS = {
@@ -37,10 +38,14 @@ OPENRCA_DATASETS = {
 }
 
 
+_RE2TT_QUERY_CSV = Path(__file__).parent / "re2tt" / "query.csv"
+
+
 class StaticProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {}
         self._load_openrca_problems()
+        self._load_re2tt_problems()
         # All static problems use Docker
         self.DOCKER_REGISTRY = list(self.PROBLEM_REGISTRY.keys())
 
@@ -57,6 +62,21 @@ class StaticProblemRegistry:
                 task_type = df.iloc[idx]["task_index"]
                 pid = f"{ds_key}-{task_type}-{idx}"
                 self.PROBLEM_REGISTRY[pid] = (cls, idx)
+
+    def _load_re2tt_problems(self):
+        """Dynamically generate RE2-TT problem entries from re2tt/query.csv."""
+        if not _RE2TT_QUERY_CSV.exists():
+            print(f"Warning: RE2-TT query.csv not found at {_RE2TT_QUERY_CSV}")
+            return
+
+        df = pd.read_csv(_RE2TT_QUERY_CSV)
+        for idx in range(len(df)):
+            row = df.iloc[idx]
+            service = row["service"].replace("ts-", "").replace("-service", "")
+            fault   = row["fault"]
+            trial   = str(row["trial"])
+            pid = f"re2tt-{service}-{fault}-{trial}"
+            self.PROBLEM_REGISTRY[pid] = (RE2TTProblem, idx)
 
     def get_problem_instance(self, problem_id: str, work_dir: str = None,
                              condition: str = None):

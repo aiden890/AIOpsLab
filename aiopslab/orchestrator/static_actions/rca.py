@@ -3,14 +3,27 @@
 All 7 task types use the same submit format (JSON dict).
 """
 
+import os as _os
 import re as _re
 import pandas as _pd
 from datetime import datetime, timezone as _tz
 
 from aiopslab.orchestrator.static_actions.base import StaticTaskActions
-from aiopslab.utils.actions import action, executor_action, metric_action, trace_action
+from aiopslab.utils.actions import action, executor_action, metric_action, trace_action, visualization
 from aiopslab.utils.status import SubmissionStatus
 
+
+# ---------------------------------------------------------------------------
+# Shared color palette for peer graphs (22 visually distinct colors)
+# ---------------------------------------------------------------------------
+_PEER_COLORS = [
+    '#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4',
+    '#42d4f4', '#f032e6', '#000000', '#ffe119', '#469990',
+    '#9A6324', '#800000', '#aaffc3', '#000075', '#a9a9a9',
+    '#808000', '#ffd8b1', '#bfef45', '#fabed4', '#dcbeff',
+    '#fffac8', '#ff6961',
+]
+_PEER_LINESTYLES = ['-', '--', '-.', ':']
 
 # ---------------------------------------------------------------------------
 # Trace call graph helpers
@@ -37,18 +50,27 @@ def _to_unix_ts(t) -> float | None:
 
 
 def _normalize_trace_schema(df: _pd.DataFrame) -> _pd.DataFrame:
-    """Normalize Bank/Telecom trace schema to (startTime, cmdb_id, dsName, elapsedTime, success).
+    """Normalize Bank/Telecom/Market trace schema to (startTime, cmdb_id, dsName, elapsedTime, success).
 
     Telecom schema: already has startTime, dsName, success, elapsedTime, cmdb_id — returned as-is.
     Bank schema: has timestamp, span_id, parent_id, trace_id, duration, cmdb_id.
-      - Reconstructs caller→callee edges from parent_id relationships.
+    Market schema: has timestamp, cmdb_id, span_id, trace_id, duration, type, status_code,
+                   operation_name, parent_span.
+      - Reconstructs caller→callee edges from parent_id/parent_span relationships.
       - Maps timestamp→startTime, duration→elapsedTime.
-      - Sets success=True (no failure info in Bank traces).
+      - Maps status_code→success (0 = True) or sets success=True if absent.
     """
     if 'dsName' in df.columns and 'startTime' in df.columns:
         return df  # Telecom schema — already correct
 
-    if 'span_id' not in df.columns or 'parent_id' not in df.columns:
+    # Detect parent column: Bank uses parent_id, Market uses parent_span
+    parent_col = None
+    if 'parent_id' in df.columns:
+        parent_col = 'parent_id'
+    elif 'parent_span' in df.columns:
+        parent_col = 'parent_span'
+
+    if 'span_id' not in df.columns or parent_col is None:
         return df  # Unknown schema, return as-is
 
     df = df.copy()
@@ -57,7 +79,15 @@ def _normalize_trace_schema(df: _pd.DataFrame) -> _pd.DataFrame:
     if 'elapsedTime' not in df.columns and 'duration' in df.columns:
         df['elapsedTime'] = df['duration']
     if 'success' not in df.columns:
-        df['success'] = True
+        if 'status_code' in df.columns:
+            df['success'] = df['status_code'].astype(str).str.strip().str.lower().isin(
+                ['0', '200', 'ok']
+            )
+        else:
+            df['success'] = True
+    # Normalize parent_col to parent_id for downstream compatibility
+    if parent_col != 'parent_id':
+        df['parent_id'] = df[parent_col]
 
     # Reconstruct caller→callee edges from parent_id
     span_cmdb = df.set_index('span_id')['cmdb_id'].to_dict()
@@ -81,12 +111,18 @@ def _compute_network_gap(raw_df: _pd.DataFrame) -> dict:
     A component whose spans consistently show a large gap is consuming network/transport
     time there, indicating network latency or packet loss.
 
-    Requires raw span rows with span_id, parent_id, duration columns (Bank schema).
+    Requires raw span rows with span_id, parent_id/parent_span, duration columns.
     Returns dict: cmdb_id -> avg_gap_ratio (avg_gap / avg_parent_duration), empty if
     schema is unsupported.
     """
-    if 'span_id' not in raw_df.columns or 'parent_id' not in raw_df.columns:
+    parent_col = 'parent_id' if 'parent_id' in raw_df.columns else (
+        'parent_span' if 'parent_span' in raw_df.columns else None
+    )
+    if 'span_id' not in raw_df.columns or parent_col is None:
         return {}
+    if parent_col != 'parent_id':
+        raw_df = raw_df.copy()
+        raw_df['parent_id'] = raw_df[parent_col]
     dur_col = 'duration' if 'duration' in raw_df.columns else (
         'elapsedTime' if 'elapsedTime' in raw_df.columns else None
     )
@@ -251,9 +287,14 @@ class StaticRCAActions(StaticTaskActions):
                  use_executor=True, use_hypothesis=True, **kwargs):
         super().__init__(*args, **kwargs)
         self._executor_fn = None
+        self.problem_id: str = ""
+        self.save_dir: str = ""
+        self._query_start = None
+        self._query_end = None
         prc = possible_root_causes or {}
         self.possible_components = prc.get("components", [])
         self.possible_reasons = prc.get("reasons", [])
+        self.component_levels = prc.get("component_levels", {})
 
         flags = telemetry_flags or {}
         enabled = set()
@@ -271,6 +312,9 @@ class StaticRCAActions(StaticTaskActions):
         self.enabled_telemetry_types: frozenset | None = (
             frozenset(enabled) if telemetry_flags is not None else None
         )
+        self.enable_visualization_tool: bool = flags.get(
+            "enable_visualization_tool", True
+        )
 
     def set_executor(self, executor_fn):
         """Inject an executor callback from the RCA agent.
@@ -280,7 +324,7 @@ class StaticRCAActions(StaticTaskActions):
         """
         self._executor_fn = executor_fn
 
-    @metric_action
+    # @metric_action
     def get_kpi_high_deviation(self, namespace: str, start_time=None, end_time=None) -> str:
         """Components whose KPI values exceed the global P90 baseline in the fault window.
         """
@@ -304,7 +348,7 @@ class StaticRCAActions(StaticTaskActions):
         ]
         return "\n".join(lines)
 
-    @metric_action
+    # @metric_action
     def get_kpi_low_deviation(self, namespace: str, start_time=None, end_time=None) -> str:
         """Components whose KPI values drop below the global P10 baseline in the fault window.
         """
@@ -327,7 +371,7 @@ class StaticRCAActions(StaticTaskActions):
         ]
         return "\n".join(lines)
 
-    @metric_action
+    # @metric_action
     def get_kpi_deviation_table(self, namespace: str, start_time=None, end_time=None) -> str:
         """One-row-per-component summary of worst KPI deviations for all possible root cause components.
         """
@@ -349,7 +393,7 @@ class StaticRCAActions(StaticTaskActions):
         ]
         return "\n".join(lines)
 
-    @metric_action
+    # @metric_action
     def get_component_kpi_deviation(self, namespace: str, component: str,
                                      start_time=None, end_time=None) -> str:
         """All KPI deviations (HIGH above P90 and LOW below P10) for one specific component.
@@ -378,7 +422,7 @@ class StaticRCAActions(StaticTaskActions):
 
         return "\n".join(lines)
 
-    @trace_action
+    # @trace_action
     def get_trace_call_graph(self, namespace: str, start_time=None, end_time=None,
                              faulty_components: list = None) -> str:
         """Identify the deepest faulty component via trace call graph analysis.
@@ -495,6 +539,533 @@ class StaticRCAActions(StaticTaskActions):
 
         return "\n".join(lines)
 
+    @visualization
+    @metric_action
+    def get_success_rate_drop_graph(self, namespace: str) -> str:
+        """Plot app-level success rate over time and highlight drop windows.
+        Reads metric_app.csv only (not container/node metrics).
+        Generates a PNG chart with per-service SR lines and red-shaded
+        regions where SR falls below 99%.
+
+        Args:
+            namespace: e.g. "static-bank", "static-telecom"
+
+        Returns:
+            File path to the generated PNG image.
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+
+        _SR_THRESHOLD = 99.0
+        _BUCKET_MINUTES = 1
+
+        df = self.static_app.fetch_metric_app_df(
+            namespace,
+            start_time=self._query_start,
+            end_time=self._query_end,
+        )
+        if df.empty:
+            return f"No metric_app data found for namespace '{namespace}'"
+
+        df = df.copy()
+
+        # --- Normalize columns ---
+        # Timestamp → unix seconds
+        if "startTime" in df.columns:
+            ts_col = "startTime"
+            if df[ts_col].max() > 1e12:
+                df[ts_col] = df[ts_col] / 1000.0
+        elif "timestamp" in df.columns:
+            ts_col = "timestamp"
+        else:
+            return "No timestamp column found in metric_app data"
+
+        # Service column
+        svc_col = None
+        for c in ["tc", "serviceName", "cmdb_id", "service"]:
+            if c in df.columns:
+                svc_col = c
+                break
+        if svc_col is None:
+            return "No service column found in metric_app data"
+
+        # Success rate → 0-100 scale
+        if "sr" in df.columns:
+            sr_col = "sr"
+        elif "succee_rate" in df.columns:
+            sr_col = "succee_rate"
+            df[sr_col] = df[sr_col] * 100.0
+        else:
+            return "No success rate column (sr / succee_rate) in metric_app data"
+
+        df["datetime"] = _pd.to_datetime(df[ts_col], unit="s", utc=True)
+
+        bucket_sec = _BUCKET_MINUTES * 60
+        df["_bucket"] = (df[ts_col] // bucket_sec) * bucket_sec
+        df["_bucket_dt"] = _pd.to_datetime(df["_bucket"], unit="s", utc=True)
+
+        services = sorted(df[svc_col].unique())
+
+        # --- Compute per-service bucketed SR ---
+        bucketed = (
+            df.groupby([svc_col, "_bucket", "_bucket_dt"])[sr_col]
+            .mean()
+            .reset_index()
+            .rename(columns={sr_col: "avg_sr"})
+        )
+
+        # --- Find drop buckets (any service below threshold) ---
+        drop_buckets = bucketed[bucketed["avg_sr"] < _SR_THRESHOLD]["_bucket_dt"].unique()
+
+        # --- Plot ---
+        n_services = len(services)
+        fig_height = max(6, 3 * min(n_services, 4))
+        fig, ax = plt.subplots(figsize=(16, fig_height))
+
+        for svc in services:
+            svc_data = bucketed[bucketed[svc_col] == svc].sort_values("_bucket_dt")
+            ax.plot(svc_data["_bucket_dt"], svc_data["avg_sr"],
+                    label=svc, linewidth=1.0, alpha=0.7)
+
+        # Highlight drop windows with red shading
+        if len(drop_buckets) > 0:
+            drop_sorted = sorted(drop_buckets)
+            bucket_delta = _pd.Timedelta(seconds=bucket_sec)
+
+            # Merge adjacent drop buckets into contiguous windows
+            window_start = drop_sorted[0]
+            window_end = drop_sorted[0] + bucket_delta
+            for dt in drop_sorted[1:]:
+                if dt <= window_end:
+                    window_end = dt + bucket_delta
+                else:
+                    ax.axvspan(window_start, window_end,
+                               color="red", alpha=0.15, zorder=0)
+                    window_start = dt
+                    window_end = dt + bucket_delta
+            ax.axvspan(window_start, window_end,
+                       color="red", alpha=0.15, zorder=0,
+                       label=f"SR < {_SR_THRESHOLD}%")
+
+        # Threshold line
+        ax.axhline(y=_SR_THRESHOLD, color="red", linestyle="--",
+                   linewidth=1.0, alpha=0.5, label=f"Threshold ({_SR_THRESHOLD}%)")
+
+        ax.set_title(f"App Success Rate — {namespace}", fontsize=14, fontweight="bold")
+        ax.set_xlabel("Time (UTC)")
+        ax.set_ylabel("Success Rate (%)")
+        ax.set_ylim(
+            max(0, bucketed["avg_sr"].min() - 5),
+            min(105, bucketed["avg_sr"].max() + 2),
+        )
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax.legend(loc="lower left", fontsize=7, ncol=3)
+
+        plt.tight_layout()
+
+        out_dir = self.save_dir or _os.path.join(self.work_dir, "static_metric_output")
+        _os.makedirs(out_dir, exist_ok=True)
+        file_path = _os.path.join(out_dir, "sr_drop_windows.png")
+        fig.savefig(file_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        # Build text summary of drop windows
+        # file_path on its own line so _extract_image_paths() detects it for vision critic
+        summary_lines = [file_path]
+        if len(drop_buckets) > 0:
+            drop_services = (
+                bucketed[bucketed["avg_sr"] < _SR_THRESHOLD]
+                .groupby(svc_col)["avg_sr"]
+                .agg(min_sr="min", count="count")
+                .sort_values("min_sr")
+            )
+            summary_lines.append(f"\nServices with SR drops below {_SR_THRESHOLD}%:")
+            for svc, row in drop_services.iterrows():
+                summary_lines.append(
+                    f"  {svc}: min_sr={row['min_sr']:.1f}%, "
+                    f"drop_buckets={int(row['count'])}"
+                )
+            drop_start = _pd.Timestamp(min(drop_buckets)).strftime("%H:%M:%S")
+            drop_end = _pd.Timestamp(max(drop_buckets)).strftime("%H:%M:%S")
+            summary_lines.append(f"  Drop window range: {drop_start} ~ {drop_end} (UTC)")
+        else:
+            summary_lines.append(
+                f"No SR drops below {_SR_THRESHOLD}% detected in the time range."
+            )
+
+        return "\n".join(summary_lines)
+
+    @visualization
+    @metric_action
+    def get_kpi_peer_graph(self, namespace: str, component_type: str,
+                           kpi_name) -> str:
+        """Plot time-series chart of KPI(s) for all peers of the given component type.
+
+        Args:
+            namespace: e.g. "static-telecom"
+            component_type: "docker", "os", "db", "redis"
+            kpi_name: a single KPI name (str) or a list of up to 2 KPI names
+
+        Returns:
+            File path(s) to the generated PNG image(s), comma-separated.
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+
+        # Normalize to list (max 2)
+        if isinstance(kpi_name, str):
+            kpi_names = [kpi_name]
+        else:
+            kpi_names = list(kpi_name)[:2]
+
+        df = self.static_app.fetch_metrics_df(
+            namespace,
+            start_time=self._query_start,
+            end_time=self._query_end,
+        )
+        if df.empty:
+            return f"No metrics found for namespace '{namespace}'"
+
+        # Normalize column names
+        if "name" in df.columns and "kpi_name" not in df.columns:
+            df = df.rename(columns={"name": "kpi_name"})
+        if "startTime" in df.columns and "timestamp" not in df.columns:
+            df = df.rename(columns={"startTime": "timestamp"})
+
+        # Filter by component_type:
+        # 1) If component_levels has this type (e.g. "node", "pod", "service"), use it
+        #    For "pod" level: metric cmdb_id may be "node-X.pod_name" — match suffix after "."
+        # 2) Otherwise, prefix match with underscore then hyphen
+        level_members = self.component_levels.get(component_type)
+        if level_members:
+            level_set = set(level_members)
+            # Direct match first (node, service levels)
+            peer_df = df[df["cmdb_id"].isin(level_set)]
+            if peer_df.empty:
+                # Suffix match for "node-X.pod_name" format (pod level)
+                peer_df = df[df["cmdb_id"].apply(
+                    lambda x: str(x).split(".", 1)[-1] if "." in str(x) else ""
+                ).isin(level_set)]
+        else:
+            peer_df = df[df["cmdb_id"].str.startswith(component_type + "_")]
+            if peer_df.empty:
+                peer_df = df[df["cmdb_id"].str.startswith(component_type + "-")]
+        if peer_df.empty:
+            return f"No metrics found for component type '{component_type}'"
+
+        avail_kpis = sorted(peer_df["kpi_name"].unique().tolist())
+        # If any requested KPI is missing, return available list only (no file)
+        missing = [k for k in kpi_names if k not in avail_kpis]
+        if missing:
+            return (
+                f"KPI(s) not found: {missing}. "
+                f"Available KPIs for component_type '{component_type}': {avail_kpis}"
+            )
+
+        n = len(kpi_names)
+        fig, axes = plt.subplots(n, 1, figsize=(14, 5 * n), squeeze=False)
+
+        out_dir = self.save_dir or _os.path.join(self.work_dir, "static_metric_output")
+        _os.makedirs(out_dir, exist_ok=True)
+
+        for idx, kpi in enumerate(kpi_names):
+            ax = axes[idx, 0]
+            kpi_df = peer_df[peer_df["kpi_name"] == kpi].copy()
+            ts = kpi_df["timestamp"]
+            if ts.median() > 1e12:
+                ts = ts / 1000.0
+            kpi_df["datetime"] = _pd.to_datetime(ts, unit="s", utc=True)
+
+            # Filter out components whose series is effectively flat over the window.
+            # Define variability as range; drop series whose range is very small
+            # relative to the global range (dead/idle KPIs).
+            components_all = sorted(kpi_df["cmdb_id"].unique())
+            ranges = {}
+            for comp in components_all:
+                vals = kpi_df[kpi_df["cmdb_id"] == comp]["value"]
+                comp_range = float(vals.max() - vals.min()) if not vals.empty else 0.0
+                ranges[comp] = comp_range
+            global_range = max(ranges.values()) if ranges else 0.0
+            # Threshold: at least 5% of global range or an absolute epsilon
+            var_threshold = max(global_range * 0.05, 1e-3)
+            components_var = [
+                c for c in components_all if ranges.get(c, 0.0) >= var_threshold
+            ]
+            # If still too many series, keep only top-N by variability to simplify legend.
+            MAX_SERIES = 12
+            if len(components_var) > MAX_SERIES:
+                components = sorted(
+                    components_var,
+                    key=lambda c: ranges.get(c, 0.0),
+                    reverse=True,
+                )[:MAX_SERIES]
+            else:
+                components = components_var
+
+            for ci, comp in enumerate(components):
+                comp_df = kpi_df[kpi_df["cmdb_id"] == comp].sort_values("datetime")
+                if comp_df.empty:
+                    continue
+                color = _PEER_COLORS[ci % len(_PEER_COLORS)]
+                ls = _PEER_LINESTYLES[ci // len(_PEER_COLORS)]
+                ax.plot(
+                    comp_df["datetime"],
+                    comp_df["value"],
+                    label=comp,
+                    linewidth=0.8,
+                    alpha=0.85,
+                    color=color,
+                    linestyle=ls,
+                    marker="o",
+                    markersize=2.5,
+                )
+
+            ax.set_title(f"{component_type} peers — {kpi}",
+                         fontsize=13, fontweight="bold")
+            ax.set_xlabel("Time (UTC)")
+            ax.set_ylabel(kpi)
+            ax.grid(True, alpha=0.3)
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            ax.legend(loc="upper right", fontsize=7, ncol=2)
+
+        plt.tight_layout()
+        fname = f"{component_type}_{'_'.join(kpi_names)}.png"
+        file_path = _os.path.join(out_dir, fname)
+        fig.savefig(file_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        return file_path
+
+    # -- Trace graph helpers (shared) ----------------------------------
+
+    def _load_trace_window(self, namespace: str) -> _pd.DataFrame:
+        """Load trace data filtered to query window, with parsed datetime and success."""
+        df = self.static_app.fetch_traces_df(
+            namespace,
+            start_time=self._query_start,
+            end_time=self._query_end,
+        )
+        if df.empty:
+            return df
+
+        # Normalize schema (adds startTime, elapsedTime, dsName, success for all datasets)
+        df = _normalize_trace_schema(df)
+
+        ts_col = 'startTime' if 'startTime' in df.columns else 'timestamp'
+        ts = df[ts_col].copy()
+        if ts.median() > 1e12:
+            ts = ts / 1000.0
+        df["datetime"] = _pd.to_datetime(ts, unit="s", utc=True)
+        df["bucket"] = df["datetime"].dt.floor("1min")
+
+        # Enforce query-time clipping on the trace window.
+        # Some static_app implementations may ignore start_time/end_time for traces,
+        # so we defensively restrict the dataframe here to [query_start, query_end]
+        # to make the x-axis of trace graphs match the problem's query range.
+        if self._query_start and self._query_end:
+            try:
+                start_dt = _pd.to_datetime(self._query_start, unit="s", utc=True)
+                end_dt = _pd.to_datetime(self._query_end, unit="s", utc=True)
+                df = df[(df["datetime"] >= start_dt) & (df["datetime"] <= end_dt)]
+            except Exception:
+                # If anything goes wrong, fall back to the unfiltered df.
+                pass
+
+        if "success" in df.columns:
+            if df["success"].dtype == object:
+                df["success_bool"] = df["success"].str.strip().str.lower().isin(
+                    ["true", "0", "200", "ok"]
+                )
+            else:
+                df["success_bool"] = df["success"].astype(bool)
+        else:
+            df["success_bool"] = True
+
+        return df
+
+    @visualization
+    @trace_action
+    def get_trace_volume_graph(self, namespace: str) -> str:
+        """Plot total trace span volume per minute across the query window.
+
+        Useful as a first screening step — network faults typically cause
+        a sharp volume drop even when latency/error signals are absent.
+
+        Args:
+            namespace: e.g. "static-telecom"
+
+        Returns:
+            File path to the generated PNG image.
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+
+        df = self._load_trace_window(namespace)
+        if df.empty:
+            return f"No trace data found for namespace '{namespace}'"
+
+        fig, ax = plt.subplots(figsize=(14, 5))
+        vol = df.groupby("bucket").size()
+        ax.bar(vol.index, vol.values,
+               width=_pd.Timedelta(seconds=50), alpha=0.7, color='steelblue')
+
+        ax.set_title("Trace Volume per Minute", fontsize=13, fontweight="bold")
+        ax.set_xlabel("Time (UTC)")
+        ax.set_ylabel("Span Count")
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+
+        plt.tight_layout()
+        out_dir = self.save_dir or _os.path.join(self.work_dir, "static_metric_output")
+        _os.makedirs(out_dir, exist_ok=True)
+        fname = "trace_volume.png"
+        file_path = _os.path.join(out_dir, fname)
+        fig.savefig(file_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        # Add summary stats
+        baseline = vol.median()
+        min_val = vol.min()
+        min_bucket = vol.idxmin().strftime("%H:%M")
+        drop_pct = (1 - min_val / baseline) * 100 if baseline > 0 else 0
+
+        summary = (
+            f"{file_path}\n\n"
+            f"Baseline volume (median): {int(baseline)} spans/min\n"
+            f"Minimum volume: {int(min_val)} spans/min at {min_bucket} UTC "
+            f"({drop_pct:.0f}% drop)"
+        )
+        return summary
+
+    @visualization
+    @trace_action
+    def get_trace_peer_graph(self, namespace: str, component_type: str,
+                             role: str = "caller") -> str:
+        """Plot trace latency (p50) and error rate for peers of a component type.
+
+        Args:
+            namespace: e.g. "static-telecom"
+            component_type: "docker", "os", "db", "redis"
+            role: "caller" (cmdb_id) or "callee" (dsName)
+
+        Returns:
+            File path to the generated PNG image.
+        """
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+
+        df = self._load_trace_window(namespace)
+        if df.empty:
+            return f"No trace data found for namespace '{namespace}'"
+
+        comp_col = "cmdb_id" if role == "caller" else "dsName"
+        level_members = self.component_levels.get(component_type)
+        if level_members:
+            level_set = set(level_members)
+            sub = df[df[comp_col].fillna("").isin(level_set)]
+            if sub.empty:
+                # Suffix match for "node-X.pod_name" format
+                sub = df[df[comp_col].fillna("").apply(
+                    lambda x: str(x).split(".", 1)[-1] if "." in str(x) else ""
+                ).isin(level_set)]
+        else:
+            sub = df[df[comp_col].fillna("").str.startswith(component_type + "_")]
+            if sub.empty:
+                sub = df[df[comp_col].fillna("").str.startswith(component_type + "-")]
+        if sub.empty:
+            return f"No trace data for {component_type} ({role})"
+
+        components = sorted(sub[comp_col].unique())
+
+        fig, (ax_lat, ax_err) = plt.subplots(2, 1, figsize=(14, 10), sharex=True)
+
+        for ci, comp in enumerate(components):
+            comp_df = sub[sub[comp_col] == comp]
+            color = _PEER_COLORS[ci % len(_PEER_COLORS)]
+            ls = _PEER_LINESTYLES[ci // len(_PEER_COLORS)]
+
+            lat = comp_df.groupby("bucket")["elapsedTime"].median()
+            ax_lat.plot(
+                lat.index,
+                lat.values,
+                label=comp,
+                linewidth=0.8,
+                alpha=0.85,
+                color=color,
+                linestyle=ls,
+                marker="o",
+                markersize=2.5,
+            )
+            # 라벨을 시계열 끝이 아니라, latency가 최대인 지점 근처에 붙여서
+            # 서로 겹치지 않고 어떤 선이 어떤 컴포넌트인지 더 쉽게 구분할 수 있게 한다.
+            if len(lat.index) > 0:
+                try:
+                    peak_idx = lat.idxmax()
+                    peak_val = float(lat.max())
+                    ax_lat.text(
+                        peak_idx,
+                        peak_val,
+                        str(comp),
+                        fontsize=7,
+                        color=color,
+                        alpha=0.9,
+                        ha="left",
+                        va="bottom",
+                        clip_on=True,
+                    )
+                except Exception:
+                    # 라벨링에 실패해도 그래프 자체는 그려지도록 한다.
+                    pass
+
+            err = comp_df.groupby("bucket")["success_bool"].apply(
+                lambda s: (1 - s.mean()) * 100
+            )
+            ax_err.plot(
+                err.index,
+                err.values,
+                label=comp,
+                linewidth=0.8,
+                alpha=0.85,
+                color=color,
+                linestyle=ls,
+                marker="o",
+                markersize=2.5,
+            )
+
+        ax_lat.set_title(f"{component_type} {role} — Trace Latency (p50)",
+                         fontsize=13, fontweight="bold")
+        ax_lat.set_ylabel("Elapsed Time (ms)")
+        ax_lat.grid(True, alpha=0.3)
+        ax_lat.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax_lat.legend(loc="upper right", fontsize=7, ncol=2)
+
+        ax_err.set_title(f"{component_type} {role} — Trace Error Rate",
+                         fontsize=13, fontweight="bold")
+        ax_err.set_xlabel("Time (UTC)")
+        ax_err.set_ylabel("Error Rate (%)")
+        ax_err.grid(True, alpha=0.3)
+        ax_err.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax_err.legend(loc="upper right", fontsize=7, ncol=2)
+
+        plt.tight_layout()
+        out_dir = self.save_dir or _os.path.join(self.work_dir, "static_metric_output")
+        _os.makedirs(out_dir, exist_ok=True)
+        fname = f"trace_{component_type}_{role}.png"
+        file_path = _os.path.join(out_dir, fname)
+        fig.savefig(file_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+        return file_path
+
     @executor_action
     def execute(self, instruction: str) -> str:
         """Runs Python code in an IPython kernel. Use for pandas data analysis on fetched CSVs."""
@@ -517,18 +1088,57 @@ class StaticRCAActions(StaticTaskActions):
         Returns:
             SubmissionStatus or str: VALID_SUBMISSION if accepted, error message if invalid.
         """
+        EXPECTED_KEYS = {
+            "root cause occurrence datetime",
+            "root cause component",
+            "root cause reason",
+        }
+        DATETIME_FMT = "%Y-%m-%d %H:%M:%S"
+
         errors = []
         for key, entry in prediction.items():
             if not isinstance(entry, dict):
+                errors.append(
+                    f"  [{key}] Value must be a dict with keys: {EXPECTED_KEYS}"
+                )
                 continue
-            component = entry.get("root cause component", "")
-            reason = entry.get("root cause reason", "")
 
+            # --- Check for wrong/missing field names ---
+            entry_keys = set(entry.keys())
+            unknown_keys = entry_keys - EXPECTED_KEYS
+            missing_keys = EXPECTED_KEYS - entry_keys
+            if unknown_keys:
+                errors.append(
+                    f"  [{key}] Unknown field(s): {unknown_keys}.\n"
+                    f"       Expected exactly: {EXPECTED_KEYS}"
+                )
+            if missing_keys:
+                errors.append(
+                    f"  [{key}] Missing field(s): {missing_keys}.\n"
+                    f"       Expected exactly: {EXPECTED_KEYS}"
+                )
+
+            # --- Validate datetime format ---
+            dt_str = entry.get("root cause occurrence datetime", "")
+            if dt_str:
+                try:
+                    datetime.strptime(dt_str.strip(), DATETIME_FMT)
+                except ValueError:
+                    errors.append(
+                        f"  [{key}] Invalid datetime format: '{dt_str}'.\n"
+                        f"       Must be '{DATETIME_FMT}' (e.g. '2020-05-23 16:10:00')"
+                    )
+
+            # --- Validate component ---
+            component = entry.get("root cause component", "")
             if self.possible_components and component and component not in self.possible_components:
                 errors.append(
                     f"  [{key}] Invalid 'root cause component': '{component}'.\n"
                     f"       Must be one of: {self.possible_components}"
                 )
+
+            # --- Validate reason ---
+            reason = entry.get("root cause reason", "")
             if self.possible_reasons and reason and reason not in self.possible_reasons:
                 errors.append(
                     f"  [{key}] Invalid 'root cause reason': '{reason}'.\n"
@@ -539,7 +1149,9 @@ class StaticRCAActions(StaticTaskActions):
             return (
                 "Submission rejected - invalid values:\n"
                 + "\n".join(errors)
-                + "\n\nPlease correct and resubmit."
+                + "\n\nPlease correct and resubmit with the exact format:\n"
+                + 'submit({"1": {"root cause occurrence datetime": "YYYY-MM-DD HH:MM:SS", '
+                + '"root cause component": "<component>", "root cause reason": "<reason>"}})'
             )
 
         return SubmissionStatus.VALID_SUBMISSION

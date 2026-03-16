@@ -13,21 +13,25 @@ class ResponseParser:
     def __init__(self):
         pass
 
+    # Code block: opening ``` then optional lang + newline, then content, then ```
+    _CODE_BLOCK_PATTERN = re.compile(r"```\s*(?:[\w]*\s*\n)?(.*?)```", re.DOTALL)
+
     def validate(self, response: str):
-        actions = re.findall(r"```\s*\n(.*?)\n```", response, re.DOTALL)
-        if len(actions) != 1:
+        blocks = self._CODE_BLOCK_PATTERN.findall(response)
+        # Require exactly one block; allow content on same line as ``` or after optional lang
+        if len(blocks) != 1:
             raise ResponseParsingError("""
-Format validation failure. Only have one pair of three ticks in your block and check the ticks. 
+Format validation failure. Only have one pair of three ticks in your block and check the ticks.
 Correct example 1:
 I should run:
 ```
-exec_shell("ls")
+get_metrics("namespace")
 ```
 
 Correct example 2:
-Check k8s info 
+Analyze the metrics data
 ```
-exec_shell("kubectl get services --all-namespaces")
+execute("Load the metrics CSV and find which service shows the earliest signal change")
 ```
             """)
 
@@ -73,18 +77,10 @@ exec_shell("kubectl get services --all-namespaces")
 
     def extract_codeblock(self, response: str) -> str:
         """Extract a markdown code block from a string.
-
-        Args:
-            response (str): The response string.
-
-        Returns:
-            str: The extracted code block.
+        Supports blocks with content on the same line as ``` or on the next line (with optional lang).
         """
-        outputlines = response.split("\n")
-        indexlines = [i for i, line in enumerate(outputlines) if "```" in line]
-        if len(indexlines) < 2:
-            return ""
-        return "\n".join(outputlines[indexlines[0] + 1 : indexlines[1]])
+        m = self._CODE_BLOCK_PATTERN.search(response)
+        return m.group(1).strip() if m else ""
 
     def extract_context(self, response: str) -> list:
         """Extract context outside of a code block.

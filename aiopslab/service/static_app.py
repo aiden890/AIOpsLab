@@ -601,6 +601,29 @@ class StaticApp:
             return pd.DataFrame()
         return _compute_kpi_deviation_table(full_df, window_df, components=components)
 
+    def fetch_metric_app_df(self, namespace: str,
+                            start_time=None, end_time=None) -> pd.DataFrame:
+        """Read app-level SR/MRT data from the metrics directory.
+
+        Tries metric_app.csv first (Bank/Telecom), then metric_service.csv (Market).
+        """
+        metric_dir = self._get_namespace_path(namespace) / "metrics"
+        if not metric_dir.exists():
+            return pd.DataFrame()
+        # Try metric_app.csv first, then metric_service.csv (Market)
+        target = metric_dir / "metric_app.csv"
+        if not target.exists():
+            target = metric_dir / "metric_service.csv"
+        if not target.exists():
+            return pd.DataFrame()
+        try:
+            df = pd.read_csv(target)
+        except Exception:
+            return pd.DataFrame()
+        ts_col = "startTime" if "startTime" in df.columns else "timestamp"
+        return _filter_by_time(df, timestamp_col=ts_col,
+                               start_time=start_time, end_time=end_time)
+
     # -- Convenience string-returning methods -- (StaticApp only)
 
     def get_logs(self, namespace: str, service: str = None,
@@ -891,3 +914,36 @@ class DockerStaticApp:
         if window_df.empty:
             return pd.DataFrame()
         return _compute_kpi_deviation_table(full_df, window_df, components=components)
+
+    def fetch_metric_app_df(self, namespace: str,
+                            start_time=None, end_time=None) -> pd.DataFrame:
+        """Read app-level SR/MRT data from the metrics directory.
+
+        Tries metric_app.csv first (Bank/Telecom), then metric_service.csv (Market).
+        """
+        dir_path, is_flat = self._resolve_telemetry_dir(namespace, "metrics")
+        if dir_path is None:
+            return pd.DataFrame()
+
+        if is_flat:
+            # Replayer flat layout — metric_app.csv doesn't exist separately
+            return pd.DataFrame()
+
+        # Try metric_app.csv first, then metric_service.csv (Market)
+        file_path = f"{dir_path}/metric_app.csv"
+        if not self._file_exists(file_path):
+            file_path = f"{dir_path}/metric_service.csv"
+        if not self._file_exists(file_path):
+            return pd.DataFrame()
+
+        content = self._docker_exec(f"cat '{file_path}'")
+        if not content.strip():
+            return pd.DataFrame()
+        try:
+            df = pd.read_csv(StringIO(content))
+        except Exception:
+            return pd.DataFrame()
+
+        ts_col = "startTime" if "startTime" in df.columns else "timestamp"
+        return _filter_by_time(df, timestamp_col=ts_col,
+                               start_time=start_time, end_time=end_time)

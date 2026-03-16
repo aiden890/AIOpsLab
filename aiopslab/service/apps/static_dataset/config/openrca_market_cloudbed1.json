@@ -7,12 +7,19 @@
   "telemetry": {
     "enable_trace": true,
     "enable_log": true,
-    "enable_metric": true
+    "enable_metric": true,
+    "enable_visualization_tool": true
   },
 
   "executor": {
     "enable": true
   },
+
+
+  "hypothesis": {
+    "enable": false
+  },
+
 
   "query": {
     "enable": true,

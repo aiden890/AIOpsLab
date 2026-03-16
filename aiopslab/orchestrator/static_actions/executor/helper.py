@@ -71,3 +71,4 @@ class TelemetryHelper:
                 "Do not call telemetry.get_traces()."
             )
         return self._actions.get_traces(self._ns, start_time=start_time, end_time=end_time)
+

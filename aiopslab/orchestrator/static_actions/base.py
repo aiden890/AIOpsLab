@@ -56,7 +56,7 @@ class StaticTaskActions:
     # Discovery / overview actions (no file save — return inline text)
     # -------------------------------------------------------------------------
 
-    @log_action
+    # @log_action
     def get_log_overview(self, namespace: str) -> str:
         """Compact summary of log data: time range, row counts per service and log type."""
         overview = self.static_app.fetch_log_overview(namespace)
@@ -84,7 +84,7 @@ class StaticTaskActions:
 
         return "\n".join(lines)
 
-    @metric_action
+    # @metric_action
     def get_anomaly_metrics(self, namespace: str, start_time=None, end_time=None) -> str:
         """Anomaly report per service: flags low success rate (<95%) or high response time (>500ms). start_time/end_time: Unix timestamps (s)."""
         df = self.static_app.fetch_anomaly_metrics(namespace, start_time=start_time, end_time=end_time)
@@ -111,7 +111,7 @@ class StaticTaskActions:
 
         return "\n".join(lines)
 
-    @metric_action
+    # @metric_action
     def get_metric_summary(self, namespace: str, start_time=None, end_time=None) -> str:
         """Aggregated metric stats per service (mean/min/max). start_time/end_time: Unix timestamps (s)."""
         df = self.static_app.fetch_metric_summary(namespace, start_time=start_time, end_time=end_time)
@@ -119,7 +119,7 @@ class StaticTaskActions:
             return f"No metric data found for namespace '{namespace}'"
         return df.to_string(index=False)
 
-    @trace_action
+    # @trace_action
     def get_trace_summary(self, namespace: str, start_time=None, end_time=None) -> str:
         """Aggregated trace stats per service: span count, avg/max/p95 duration. start_time/end_time: Unix timestamps (s)."""
         df = self.static_app.fetch_trace_summary(namespace, start_time=start_time, end_time=end_time)
@@ -127,7 +127,7 @@ class StaticTaskActions:
             return f"No trace data found for namespace '{namespace}'"
         return df.to_string(index=False)
 
-    @log_action
+    # @log_action
     def search_logs(self, namespace: str, keyword: str = None,
                     start_time=None, end_time=None, limit: int = 100,
                     service: str = None) -> str:
@@ -174,7 +174,7 @@ class StaticTaskActions:
     # get_* : fetch from source → save to local CSV → return path
     # -------------------------------------------------------------------------
 
-    @log_action
+    # Deactivated: not exposed in get_available_actions (no @log_action)
     def get_logs(self, namespace: str, service: str = None,
                  limit: int = 500) -> str:
         """Fetches log data, saves to CSV, returns file path. Use read_logs() or exec_shell() to inspect."""
@@ -190,7 +190,6 @@ class StaticTaskActions:
 
         return file_path
 
-    @metric_action
     def get_metrics(self, namespace: str, start_time=None, end_time=None) -> str:
         """Fetches metrics data, saves to CSV, returns file path. start_time/end_time: Unix timestamps (s)."""
         df = self.static_app.fetch_metrics_df(namespace, start_time=start_time, end_time=end_time)
@@ -204,7 +203,6 @@ class StaticTaskActions:
 
         return file_path
 
-    @trace_action
     def get_traces(self, namespace: str, start_time=None, end_time=None) -> str:
         """Fetches trace data, saves to CSV, returns file path. start_time/end_time: Unix timestamps (s)."""
         df = self.static_app.fetch_traces_df(namespace, start_time=start_time, end_time=end_time)
@@ -222,8 +220,8 @@ class StaticTaskActions:
     # read_* : read a saved local CSV file → return data
     # -------------------------------------------------------------------------
 
+    # Deactivated: not exposed in get_available_actions (no @log_action)
     @staticmethod
-    @log_action
     def read_logs(file_path: str, limit: int = 200, offset: int = 0) -> str:
         """Reads log CSV saved by get_logs(). Supports pagination via offset/limit."""
         if not os.path.exists(file_path):
@@ -240,7 +238,6 @@ class StaticTaskActions:
             return f"Failed to read logs: {str(e)}"
 
     @staticmethod
-    @metric_action
     def read_metrics(file_path: str, limit: int = 200, offset: int = 0) -> str:
         """Reads metrics CSV saved by get_metrics(). Supports pagination via offset/limit."""
         if not os.path.exists(file_path):
@@ -257,7 +254,6 @@ class StaticTaskActions:
             return f"Failed to read metrics: {str(e)}"
 
     @staticmethod
-    @trace_action
     def read_traces(file_path: str, limit: int = 200, offset: int = 0) -> str:
         """Reads traces CSV saved by get_traces(). Supports pagination via offset/limit."""
         if not os.path.exists(file_path):
@@ -277,7 +273,7 @@ class StaticTaskActions:
     # Shell access (restricted)
     # -------------------------------------------------------------------------
 
-    @action
+    # @action
     def exec_shell(self, command: str, timeout: int = 30) -> str:
         """Runs a shell command. Restricted to: static_logs_output, static_metrics_output, static_traces_output."""
         BLOCK_LIST = {

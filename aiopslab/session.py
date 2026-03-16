@@ -35,6 +35,7 @@ class Session:
         self.model_name = None
         self.eval_id = eval_id
         self.results_dir = Path(results_dir) if isinstance(results_dir, str) else results_dir
+        self._save_dir_override: Path | None = None
 
     def set_problem(self, problem, pid=None):
         """Set the problem instance for the session.
@@ -132,9 +133,13 @@ class Session:
     def get_save_dir(self) -> Path:
         """Get the directory where all session files are saved.
 
-        Structure: results_dir / dataset / agent / model / eval_id /
-        Created on first call.
+        Structure: results_dir / dataset / agent / model / eval_id / [task] /
+        If ``_save_dir_override`` is set, returns that path directly.
         """
+        if self._save_dir_override is not None:
+            self._save_dir_override.mkdir(parents=True, exist_ok=True)
+            return self._save_dir_override
+
         results_dir = self.results_dir if self.results_dir else RESULTS_DIR
         agent = self.agent_name or "agent"
         pid = self.pid or "unknown"

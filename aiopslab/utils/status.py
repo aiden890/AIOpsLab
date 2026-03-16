@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 import logging
 import re
+import threading
 
 from aiopslab.config import Config
 from aiopslab.paths import BASE_DIR
@@ -41,6 +42,11 @@ class SessionPrint:
         self.log_file = None
         self.log_filepath = None
         self._logging_handler = None
+        self._owner_thread = None
+
+    def _thread_filter(self, record):
+        """Only accept log records from the thread that owns this handler."""
+        return threading.current_thread().ident == self._owner_thread
 
     def init_log_file(self, filepath):
         """Initialize log file for session output."""
@@ -52,12 +58,16 @@ class SessionPrint:
             self.step_count = 0
 
             # Attach Python logging FileHandler to the same file
-            # so executor/agent debug logs also go to the session log
+            # so executor/agent debug logs also go to the session log.
+            # Use a thread-local filter so parallel workers don't
+            # write to each other's log files.
+            self._owner_thread = threading.current_thread().ident
             self._logging_handler = logging.FileHandler(filepath, mode='a', encoding='utf-8')
             self._logging_handler.setLevel(logging.DEBUG)
             self._logging_handler.setFormatter(
                 logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s")
             )
+            self._logging_handler.addFilter(self._thread_filter)
             logging.getLogger().addHandler(self._logging_handler)
 
             # Always print log file path to terminal
@@ -156,6 +166,64 @@ class SessionPrint:
                 # Non-ReAct agent: log raw response
                 self._log("🤖 Agent Response:", f"{Fore.GREEN}🤖 Agent Response:{Style.RESET_ALL}")
                 self._log(f"   {action}")
+
+    def agent(self, action):
+        self.step_count += 1
+
+        # Always print step progress to terminal
+        print(f"{Fore.CYAN}[Step {self.step_count}]{Style.RESET_ALL}", end=" ", flush=True)
+
+        if self.enable_terminal or self.enable_file:
+            self._log("\n" + "=" * 60, f"\n{Fore.CYAN}{'='*60}")
+            self._log(f"Step {self.step_count}", f"Step {self.step_count}")
+            self._log("=" * 60, f"{'='*60}{Style.RESET_ALL}")
+
+            # Try to parse as ReAct format
+            thought, action_text = self._parse_react_response(action)
+
+            # If ReAct format detected (has thought or action)
+            if thought or action_text:
+                if thought:
+                    self._log("💭 Thought:", f"{Fore.YELLOW}💭 Thought:{Style.RESET_ALL}")
+                    self._log(f"   {thought}\n")
+
+                if action_text:
+                    self._log("⚡ Action:", f"{Fore.GREEN}⚡ Action:{Style.RESET_ALL}")
+                    self._log(f"   {action_text}")
+            else:
+                # Non-ReAct agent: log raw response
+                self._log("🤖 Agent Response:", f"{Fore.GREEN}🤖 Agent Response:{Style.RESET_ALL}")
+                self._log(f"   {action}")
+
+    def agent_detail(self, action):
+        """Log agent message without starting a new step (no Step N header)."""
+        if self.enable_terminal or self.enable_file:
+            thought, action_text = self._parse_react_response(action)
+            if thought or action_text:
+                if thought:
+                    self._log("💭 Thought:", f"{Fore.YELLOW}💭 Thought:{Style.RESET_ALL}")
+                    self._log(f"   {thought}\n")
+                if action_text:
+                    self._log("⚡ Action:", f"{Fore.GREEN}⚡ Action:{Style.RESET_ALL}")
+                    self._log(f"   {action_text}")
+            else:
+                self._log("🤖 Agent Response:", f"{Fore.GREEN}🤖 Agent Response:{Style.RESET_ALL}")
+                self._log(f"   {action}")
+
+    def service_detail(self, response):
+        """Log observation without starting a new step (no ✓, no step increment)."""
+        if self.enable_terminal or self.enable_file:
+            self._log("\n📋 Observation:", f"\n{Fore.BLUE}📋 Observation:{Style.RESET_ALL}")
+            response_str = str(response) if not isinstance(response, str) else response
+            if len(response_str) > 2000:
+                self._log(f"   {response_str[:2000]}...")
+                self._log(
+                    f"   [Response truncated - {len(response_str)} total chars]",
+                    f"   {Fore.YELLOW}[Response truncated - {len(response_str)} total chars]{Style.RESET_ALL}",
+                )
+            else:
+                self._log(f"   {response_str}")
+            self._log("-" * 60 + "\n", f"{Fore.CYAN}{'-'*60}{Style.RESET_ALL}\n")
 
     def service(self, response):
         # Always print step completion to terminal

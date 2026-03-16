@@ -36,12 +36,24 @@ def load_config(config_path):
 
 def _openai_chat(messages, temperature, configs):
     from openai import OpenAI
-    client = OpenAI(api_key=configs["API_KEY"])
-    return client.chat.completions.create(
-        model=configs["MODEL"],
-        messages=messages,
-        temperature=temperature,
-    ).choices[0].message.content
+    timeout = float(configs.get("TIMEOUT", 120))
+    client = OpenAI(api_key=configs["API_KEY"], timeout=timeout)
+    kwargs = dict(model=configs["MODEL"], messages=messages)
+    if configs.get("REASONING_EFFORT"):
+        kwargs["reasoning_effort"] = configs["REASONING_EFFORT"]
+    else:
+        kwargs["temperature"] = temperature
+    resp = client.chat.completions.create(**kwargs)
+    # Accumulate token usage on the configs dict so callers can read per-run totals.
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        inp = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None)
+        out = getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", None)
+        if inp is not None:
+            configs["_in_tokens"] = configs.get("_in_tokens", 0) + int(inp)
+        if out is not None:
+            configs["_out_tokens"] = configs.get("_out_tokens", 0) + int(out)
+    return resp.choices[0].message.content
 
 
 def _google_chat(messages, temperature, configs):
@@ -80,12 +92,23 @@ def _anthropic_chat(messages, temperature, configs):
 def _compatible_chat(messages, temperature, configs):
     """OpenAI-compatible endpoint (e.g., vLLM, Azure, third-party)."""
     from openai import OpenAI
-    client = OpenAI(api_key=configs["API_KEY"], base_url=configs["API_BASE"])
-    return client.chat.completions.create(
-        model=configs["MODEL"],
-        messages=messages,
-        temperature=temperature,
-    ).choices[0].message.content
+    timeout = float(configs.get("TIMEOUT", 120))
+    client = OpenAI(api_key=configs["API_KEY"], base_url=configs["API_BASE"], timeout=timeout)
+    kwargs = dict(model=configs["MODEL"], messages=messages)
+    if configs.get("REASONING_EFFORT"):
+        kwargs["reasoning_effort"] = configs["REASONING_EFFORT"]
+    else:
+        kwargs["temperature"] = temperature
+    resp = client.chat.completions.create(**kwargs)
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        inp = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None)
+        out = getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", None)
+        if inp is not None:
+            configs["_in_tokens"] = configs.get("_in_tokens", 0) + int(inp)
+        if out is not None:
+            configs["_out_tokens"] = configs.get("_out_tokens", 0) + int(out)
+    return resp.choices[0].message.content
 
 
 _BACKENDS = {

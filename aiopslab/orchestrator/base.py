@@ -87,7 +87,7 @@ class BaseOrchestrator:
         raise NotImplementedError
 
     def init_problem(self, problem_id: str, work_dir: str = None,
-                     condition: str = None):
+                     condition: str = None, skip_deploy: bool = False):
         """Initialize a problem instance for the agent to solve.
 
         Args:
@@ -95,6 +95,7 @@ class BaseOrchestrator:
             work_dir: Directory for saving telemetry CSV files.
                       Use unique paths for parallel runs to avoid conflicts.
             condition: Telemetry ablation condition for container isolation.
+            skip_deploy: If True, do not deploy the app (e.g. when using prefiltered telemetry).
         """
         self.execution_start_time = time.time()
 
@@ -111,9 +112,10 @@ class BaseOrchestrator:
         # Subclass-specific environment setup
         self._setup_environment(prob, deployment)
 
-        # Deploy service
-        prob.app.delete()
-        prob.app.deploy()
+        # Deploy service (skip when using prefiltered/local telemetry)
+        if not skip_deploy:
+            prob.app.delete()
+            prob.app.deploy()
 
         # Inject fault
         with CriticalSection():

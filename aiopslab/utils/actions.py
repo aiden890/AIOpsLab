@@ -72,6 +72,12 @@ def trace_action(method):
     return method
 
 
+def visualization(method):
+    """Stack on top of metric_action/trace_action to mark as a visualization tool."""
+    method.is_visualization = True
+    return method
+
+
 def executor_action(method):
     """Mark a method as an executor action (requires use_executor=True)."""
     method.is_action = True

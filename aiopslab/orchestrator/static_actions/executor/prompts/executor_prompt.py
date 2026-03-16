@@ -53,7 +53,9 @@ summary_template = """The code execution is successful. The execution result is 
 
 {result}
 
-Please summarize a straightforward answer to the question based on the execution results. Use plain English."""
+Now summarize the execution result above in plain natural language.
+Do NOT write Python code. Do NOT use code blocks.
+Write a concise natural language summary with the key data points and findings."""
 
 conclusion_template = """{answer}
 
