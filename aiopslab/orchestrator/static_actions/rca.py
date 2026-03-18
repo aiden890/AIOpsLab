@@ -888,6 +888,594 @@ class StaticRCAActions(StaticTaskActions):
 
         return df
 
+    def _load_trace_window_minutes(
+        self,
+        namespace: str,
+        window_minutes: int | None = None,
+    ) -> _pd.DataFrame:
+        """Load trace data and optionally trim to the last N minutes."""
+        df = self._load_trace_window(namespace)
+        if df.empty or not window_minutes or window_minutes <= 0:
+            return df
+
+        end_dt = df["datetime"].max()
+        start_dt = end_dt - _pd.Timedelta(minutes=int(window_minutes))
+        return df[df["datetime"] >= start_dt].copy()
+
+    def _build_trace_edge_metric_frame(self, df: _pd.DataFrame) -> _pd.DataFrame:
+        """Aggregate trace rows into per-minute caller->callee edge metrics."""
+        if df.empty:
+            return df
+
+        edge_df = df.copy()
+        edge_df["caller"] = edge_df["cmdb_id"].fillna("").astype(str).str.strip()
+        edge_df["callee"] = edge_df["dsName"].fillna("").astype(str).str.strip()
+        edge_df = edge_df[
+            (edge_df["caller"] != "")
+            & (edge_df["callee"] != "")
+        ]
+        if edge_df.empty:
+            return edge_df
+
+        metrics = (
+            edge_df
+            .groupby(["caller", "callee", "bucket"], as_index=False)
+            .agg(
+                latency_p50=("elapsedTime", "median"),
+                error_rate=("success_bool", lambda s: (1 - s.mean()) * 100),
+                volume=("success_bool", "size"),
+            )
+            .sort_values(["caller", "callee", "bucket"])
+        )
+        return metrics
+
+    def _detect_trace_metric_onset(
+        self,
+        edge_metric_df: _pd.DataFrame,
+        value_col: str,
+        metric_kind: str,
+        *,
+        baseline_buckets: int = 5,
+        sustain_buckets: int = 2,
+        min_edge_volume: int = 20,
+    ) -> dict | None:
+        """Detect earliest sustained shift in one edge metric series."""
+        if edge_metric_df.empty:
+            return None
+
+        series_df = edge_metric_df.sort_values("bucket").reset_index(drop=True)
+        n_rows = len(series_df)
+        if n_rows < baseline_buckets + sustain_buckets:
+            return None
+
+        values = series_df[value_col].astype(float)
+        volumes = series_df["volume"].fillna(0).astype(float)
+        buckets = series_df["bucket"]
+
+        for idx in range(baseline_buckets, n_rows - sustain_buckets + 1):
+            history = values.iloc[idx - baseline_buckets:idx]
+            if history.empty or history.isna().any():
+                continue
+
+            future_vals = values.iloc[idx:idx + sustain_buckets]
+            future_vols = volumes.iloc[idx:idx + sustain_buckets]
+            if len(future_vals) < sustain_buckets:
+                continue
+
+            baseline = float(history.median())
+            peak = float(future_vals.max())
+            trough = float(future_vals.min())
+            if metric_kind == "latency":
+                if (future_vols < min_edge_volume).any():
+                    continue
+                threshold = max(baseline * 1.8, baseline + 40.0)
+                if baseline <= 1.0:
+                    threshold = max(threshold, 40.0)
+                if all(float(v) >= threshold for v in future_vals):
+                    return {
+                        "metric": metric_kind,
+                        "onset": buckets.iloc[idx],
+                        "baseline": baseline,
+                        "peak": peak,
+                        "threshold": threshold,
+                    }
+            elif metric_kind == "error_rate":
+                if (future_vols < min_edge_volume).any():
+                    continue
+                threshold = max(baseline * 3.0, baseline + 10.0, 5.0)
+                if all(float(v) >= threshold for v in future_vals):
+                    return {
+                        "metric": metric_kind,
+                        "onset": buckets.iloc[idx],
+                        "baseline": baseline,
+                        "peak": peak,
+                        "threshold": threshold,
+                    }
+            elif metric_kind == "volume_drop":
+                if baseline < min_edge_volume:
+                    continue
+                threshold = min(baseline * 0.5, baseline - 10.0)
+                threshold = max(threshold, 0.0)
+                if all(float(v) <= threshold for v in future_vals):
+                    return {
+                        "metric": metric_kind,
+                        "onset": buckets.iloc[idx],
+                        "baseline": baseline,
+                        "trough": trough,
+                        "threshold": threshold,
+                        "drop_pct": max(0.0, (baseline - trough) / max(baseline, 1.0) * 100.0),
+                    }
+
+        return None
+
+    def _detect_trace_edge_anomalies(
+        self,
+        edge_metric_df: _pd.DataFrame,
+        *,
+        baseline_buckets: int = 5,
+        sustain_buckets: int = 2,
+        min_edge_volume: int = 20,
+    ) -> list[dict]:
+        """Detect earliest anomalous caller->callee edges from latency, error, or volume shifts."""
+        if edge_metric_df.empty:
+            return []
+
+        anomalies: list[dict] = []
+        grouped = edge_metric_df.groupby(["caller", "callee"], sort=True)
+        for (caller, callee), group in grouped:
+            if not caller or not callee:
+                continue
+            latency_info = self._detect_trace_metric_onset(
+                group,
+                "latency_p50",
+                "latency",
+                baseline_buckets=baseline_buckets,
+                sustain_buckets=sustain_buckets,
+                min_edge_volume=min_edge_volume,
+            )
+            error_info = self._detect_trace_metric_onset(
+                group,
+                "error_rate",
+                "error_rate",
+                baseline_buckets=baseline_buckets,
+                sustain_buckets=sustain_buckets,
+                min_edge_volume=min_edge_volume,
+            )
+            volume_info = self._detect_trace_metric_onset(
+                group,
+                "volume",
+                "volume_drop",
+                baseline_buckets=baseline_buckets,
+                sustain_buckets=sustain_buckets,
+                min_edge_volume=min_edge_volume,
+            )
+            if not latency_info and not error_info and not volume_info:
+                continue
+
+            metric_infos = {
+                "latency": latency_info,
+                "error_rate": error_info,
+                "volume_drop": volume_info,
+            }
+            onset_candidates = [
+                info["onset"] for info in metric_infos.values() if info is not None
+            ]
+            first_onset = min(onset_candidates)
+            earliest_metrics = [
+                name for name, info in metric_infos.items()
+                if info is not None
+                and abs((info["onset"] - first_onset).total_seconds()) / 60.0 <= 1.5
+            ]
+            dominant_metric = earliest_metrics[0] if len(earliest_metrics) == 1 else "mixed"
+
+            latency_score = 0.0
+            if latency_info:
+                latency_score = (
+                    max(latency_info["peak"] - latency_info["baseline"], 0.0)
+                    / max(latency_info["baseline"], 1.0)
+                )
+            error_score = 0.0
+            if error_info:
+                error_score = (
+                    max(error_info["peak"] - error_info["baseline"], 0.0)
+                    / max(error_info["baseline"], 1.0)
+                )
+            volume_score = 0.0
+            if volume_info:
+                volume_score = (
+                    max(volume_info["baseline"] - volume_info["trough"], 0.0)
+                    / max(volume_info["baseline"], 1.0)
+                )
+
+            anomalies.append(
+                {
+                    "edge_id": f"{caller}->{callee}",
+                    "caller": caller,
+                    "callee": callee,
+                    "first_onset": first_onset,
+                    "dominant_metric": dominant_metric,
+                    "latency_info": latency_info,
+                    "error_info": error_info,
+                    "volume_info": volume_info,
+                    "series": group.sort_values("bucket").reset_index(drop=True),
+                    "score": latency_score + error_score + volume_score,
+                }
+            )
+
+        return sorted(
+            anomalies,
+            key=lambda item: (item["first_onset"], -item["score"], item["edge_id"]),
+        )
+
+    def _select_trace_path_subgraph(
+        self,
+        anomalies: list[dict],
+        *,
+        top_k_paths: int = 5,
+        onset_slack_minutes: int = 3,
+        path_slack_minutes: int = 5,
+    ) -> list[dict]:
+        """Grow a connected anomalous subgraph around the earliest anomalous edges."""
+        if not anomalies:
+            return []
+
+        earliest = anomalies[0]["first_onset"]
+        seed_cutoff = earliest + _pd.Timedelta(minutes=onset_slack_minutes)
+        seeds = [item for item in anomalies if item["first_onset"] <= seed_cutoff]
+        seeds = seeds[:max(1, top_k_paths)]
+
+        outgoing: dict[str, list[dict]] = {}
+        incoming: dict[str, list[dict]] = {}
+        by_id = {item["edge_id"]: item for item in anomalies}
+        for item in anomalies:
+            outgoing.setdefault(item["caller"], []).append(item)
+            incoming.setdefault(item["callee"], []).append(item)
+
+        selected: dict[str, dict] = {item["edge_id"]: item for item in seeds}
+        queue = list(seeds)
+        while queue:
+            current = queue.pop(0)
+            current_time = current["first_onset"]
+            neighbors = outgoing.get(current["callee"], []) + incoming.get(current["caller"], [])
+            for candidate in neighbors:
+                if candidate["edge_id"] in selected:
+                    continue
+                delta_min = abs(
+                    (candidate["first_onset"] - current_time).total_seconds()
+                ) / 60.0
+                if delta_min > path_slack_minutes:
+                    continue
+                selected[candidate["edge_id"]] = candidate
+                queue.append(candidate)
+
+        selected_edges = list(selected.values())
+        selected_edges.sort(
+            key=lambda item: (item["first_onset"], -item["score"], item["edge_id"])
+        )
+        return selected_edges[: max(top_k_paths * 3, 8)]
+
+    def _compute_trace_path_layout(self, selected_edges: list[dict]) -> dict[str, tuple[float, float]]:
+        """Layout nodes left-to-right by causal depth for the anomalous path subgraph."""
+        nodes = sorted(
+            {item["caller"] for item in selected_edges} | {item["callee"] for item in selected_edges}
+        )
+        if not nodes:
+            return {}
+
+        indegree = {node: 0 for node in nodes}
+        outgoing_nodes: dict[str, list[str]] = {node: [] for node in nodes}
+        for item in selected_edges:
+            caller = item["caller"]
+            callee = item["callee"]
+            if callee not in outgoing_nodes[caller]:
+                outgoing_nodes[caller].append(callee)
+                indegree[callee] += 1
+
+        depth = {node: 0 for node in nodes}
+        queue = [node for node in nodes if indegree[node] == 0]
+        visited = set(queue)
+        while queue:
+            node = queue.pop(0)
+            for nxt in outgoing_nodes.get(node, []):
+                depth[nxt] = max(depth[nxt], depth[node] + 1)
+                indegree[nxt] -= 1
+                if indegree[nxt] == 0:
+                    queue.append(nxt)
+                    visited.add(nxt)
+
+        for node in nodes:
+            if node not in visited:
+                depth[node] = max(depth.values(), default=0)
+
+        layers: dict[int, list[str]] = {}
+        for node in nodes:
+            layers.setdefault(depth[node], []).append(node)
+
+        positions: dict[str, tuple[float, float]] = {}
+        for layer_idx, layer_nodes in sorted(layers.items()):
+            layer_nodes = sorted(layer_nodes)
+            count = len(layer_nodes)
+            for row_idx, node in enumerate(layer_nodes):
+                y = (count - 1) / 2.0 - row_idx
+                positions[node] = (layer_idx * 3.4, y * 1.7)
+        return positions
+
+    def _edge_plot_color(self, dominant_metric: str) -> str:
+        """Color-code anomalous edges by which signal rose first."""
+        return {
+            "latency": "#1f77b4",
+            "error_rate": "#d62728",
+            "volume_drop": "#ff7f0e",
+            "mixed": "#9467bd",
+        }.get(dominant_metric, "#7f7f7f")
+
+    def _edge_summary_label(self, item: dict) -> str:
+        """Compact caller->callee edge label for legends and annotations."""
+        return f"{item['caller']} -> {item['callee']}"
+
+    def _edge_graph_label(self, item: dict) -> str:
+        """Compact edge annotation for the path graph."""
+        onset = item["first_onset"].strftime("%H:%M")
+        parts = [onset]
+        if item.get("latency_info"):
+            parts.append(f"L {item['latency_info']['peak']:.0f}ms")
+        if item.get("error_info"):
+            parts.append(f"E {item['error_info']['peak']:.0f}%")
+        if item.get("volume_info"):
+            parts.append(f"V -{item['volume_info']['drop_pct']:.0f}%")
+        return "\n".join(parts)
+
+    def _plot_trace_anomalous_path_figure(
+        self,
+        selected_edges: list[dict],
+        out_path: str,
+        *,
+        window_minutes: int,
+    ) -> str:
+        """Render path graph plus edge-level latency/error/volume timelines."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        from matplotlib.lines import Line2D
+
+        fig = plt.figure(figsize=(16, 15))
+        grid = fig.add_gridspec(3, 2, height_ratios=[1.05, 1.0, 0.95])
+        ax_graph = fig.add_subplot(grid[0, :])
+        ax_lat = fig.add_subplot(grid[1, 0])
+        ax_err = fig.add_subplot(grid[1, 1], sharex=ax_lat)
+        ax_vol = fig.add_subplot(grid[2, :], sharex=ax_lat)
+
+        positions = self._compute_trace_path_layout(selected_edges)
+        ax_graph.set_axis_off()
+
+        all_x = [pos[0] for pos in positions.values()] or [0.0]
+        all_y = [pos[1] for pos in positions.values()] or [0.0]
+        for idx, item in enumerate(selected_edges):
+            sx, sy = positions[item["caller"]]
+            tx, ty = positions[item["callee"]]
+            color = self._edge_plot_color(item["dominant_metric"])
+            rad = 0.08 if idx % 2 == 0 else -0.08
+            ax_graph.annotate(
+                "",
+                xy=(tx - 0.35, ty),
+                xytext=(sx + 0.35, sy),
+                arrowprops={
+                    "arrowstyle": "->",
+                    "lw": 2.0,
+                    "color": color,
+                    "alpha": 0.9,
+                    "connectionstyle": f"arc3,rad={rad}",
+                },
+                zorder=1,
+            )
+            mx = (sx + tx) / 2.0
+            my = (sy + ty) / 2.0 + (0.22 if idx % 2 == 0 else -0.22)
+            ax_graph.text(
+                mx,
+                my,
+                self._edge_graph_label(item),
+                fontsize=8,
+                ha="center",
+                va="center",
+                color=color,
+                bbox={
+                    "boxstyle": "round,pad=0.18",
+                    "fc": "white",
+                    "ec": "none",
+                    "alpha": 0.85,
+                },
+                zorder=3,
+            )
+
+        for node, (x, y) in positions.items():
+            ax_graph.text(
+                x,
+                y,
+                node,
+                ha="center",
+                va="center",
+                fontsize=10,
+                bbox={
+                    "boxstyle": "round,pad=0.35",
+                    "fc": "#F7F8FA",
+                    "ec": "#4F5B67",
+                    "lw": 1.2,
+                },
+                zorder=4,
+            )
+
+        graph_legend = [
+            Line2D([0], [0], color="#1f77b4", lw=2, label="latency rises first"),
+            Line2D([0], [0], color="#d62728", lw=2, label="error rises first"),
+            Line2D([0], [0], color="#ff7f0e", lw=2, label="volume drops first"),
+            Line2D([0], [0], color="#9467bd", lw=2, label="multiple signals rise together"),
+        ]
+        ax_graph.legend(handles=graph_legend, loc="upper right", frameon=False, fontsize=8)
+        ax_graph.set_title(
+            f"Earliest anomalous caller-callee paths ({window_minutes}-minute trace window)",
+            fontsize=13,
+            fontweight="bold",
+            pad=12,
+        )
+        ax_graph.set_xlim(min(all_x) - 1.3, max(all_x) + 1.3)
+        ax_graph.set_ylim(min(all_y) - 1.4, max(all_y) + 1.4)
+
+        for item in selected_edges:
+            color = self._edge_plot_color(item["dominant_metric"])
+            label = self._edge_summary_label(item)
+            series = item["series"]
+            ax_lat.plot(
+                series["bucket"],
+                series["latency_p50"],
+                label=label,
+                color=color,
+                linewidth=1.8,
+                alpha=0.9,
+            )
+            ax_err.plot(
+                series["bucket"],
+                series["error_rate"],
+                label=label,
+                color=color,
+                linewidth=1.8,
+                alpha=0.9,
+            )
+            ax_vol.plot(
+                series["bucket"],
+                series["volume"],
+                label=label,
+                color=color,
+                linewidth=1.8,
+                alpha=0.9,
+            )
+            if item.get("latency_info"):
+                ax_lat.axvline(
+                    item["latency_info"]["onset"],
+                    color=color,
+                    linestyle=":",
+                    alpha=0.35,
+                    linewidth=1.0,
+                )
+            if item.get("error_info"):
+                ax_err.axvline(
+                    item["error_info"]["onset"],
+                    color=color,
+                    linestyle=":",
+                    alpha=0.35,
+                    linewidth=1.0,
+                )
+            if item.get("volume_info"):
+                ax_vol.axvline(
+                    item["volume_info"]["onset"],
+                    color=color,
+                    linestyle=":",
+                    alpha=0.35,
+                    linewidth=1.0,
+                )
+
+        ax_lat.set_title("Edge latency (p50) over time", fontsize=11, fontweight="bold")
+        ax_lat.set_ylabel("Latency (ms)")
+        ax_lat.grid(True, alpha=0.3)
+        ax_lat.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax_lat.legend(loc="upper left", fontsize=7, ncol=2)
+
+        ax_err.set_title("Edge error rate over time", fontsize=11, fontweight="bold")
+        ax_err.set_ylabel("Error rate (%)")
+        ax_err.set_xlabel("Time (UTC)")
+        ax_err.grid(True, alpha=0.3)
+        ax_err.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax_err.legend(loc="upper left", fontsize=7, ncol=2)
+
+        ax_vol.set_title("Edge span volume over time", fontsize=11, fontweight="bold")
+        ax_vol.set_ylabel("Span count")
+        ax_vol.set_xlabel("Time (UTC)")
+        ax_vol.grid(True, alpha=0.3)
+        ax_vol.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax_vol.legend(loc="upper left", fontsize=7, ncol=2)
+
+        plt.tight_layout()
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return out_path
+
+    @visualization
+    @trace_action
+    def get_trace_anomalous_path_graph(
+        self,
+        namespace: str,
+        window_minutes: int = 30,
+        top_k_paths: int = 5,
+        min_edge_volume: int = 20,
+        onset_slack_minutes: int = 3,
+        sustain_buckets: int = 2,
+    ) -> str:
+        """Find earliest anomalous caller->callee paths and visualize multi-hop propagation.
+
+        This action scans the trace window, detects the earliest sustained rise in
+        latency and/or error rate plus sharp volume drops on caller->callee edges, grows a connected
+        multi-hop anomalous subgraph, and renders:
+        1. a directed path graph of the earliest anomalous edges
+        2. per-edge latency timelines
+        3. per-edge error-rate timelines
+        4. per-edge span-volume timelines
+
+        Args:
+            namespace: e.g. "static-telecom"
+            window_minutes: inspect only the last N minutes of the trace window
+            top_k_paths: number of earliest seed edges to start path growth from
+            min_edge_volume: minimum spans/min required to trust an edge signal
+            onset_slack_minutes: edges within this many minutes of the earliest onset become seeds
+            sustain_buckets: require anomaly to persist for this many 1-minute buckets
+
+        Returns:
+            PNG path plus a short textual summary of the earliest anomalous paths.
+        """
+        df = self._load_trace_window_minutes(namespace, window_minutes=window_minutes)
+        if df.empty:
+            return f"No trace data found for namespace '{namespace}'"
+
+        edge_metric_df = self._build_trace_edge_metric_frame(df)
+        if edge_metric_df.empty:
+            return "No caller-callee trace edges found in the selected window"
+
+        anomalies = self._detect_trace_edge_anomalies(
+            edge_metric_df,
+            sustain_buckets=sustain_buckets,
+            min_edge_volume=min_edge_volume,
+        )
+        if not anomalies:
+            return (
+                "No anomalous caller-callee paths found. "
+                f"Checked last {window_minutes} minutes with min_edge_volume={min_edge_volume}."
+            )
+
+        selected_edges = self._select_trace_path_subgraph(
+            anomalies,
+            top_k_paths=top_k_paths,
+            onset_slack_minutes=onset_slack_minutes,
+            path_slack_minutes=max(onset_slack_minutes + 2, 5),
+        )
+        if not selected_edges:
+            return "Trace anomalies were detected, but no connected path subgraph could be formed."
+
+        out_dir = self.save_dir or _os.path.join(self.work_dir, "static_metric_output")
+        _os.makedirs(out_dir, exist_ok=True)
+        out_path = _os.path.join(out_dir, "trace_anomalous_paths.png")
+        self._plot_trace_anomalous_path_figure(
+            selected_edges,
+            out_path,
+            window_minutes=window_minutes,
+        )
+
+        summary_lines = [out_path, "", "Earliest anomalous edges:"]
+        for item in selected_edges[: min(len(selected_edges), 8)]:
+            onset = item["first_onset"].strftime("%Y-%m-%d %H:%M:%S")
+            summary_lines.append(
+                f"- {item['caller']} -> {item['callee']} | onset={onset} | mode={item['dominant_metric']}"
+            )
+        return "\n".join(summary_lines)
+
     @visualization
     @trace_action
     def get_trace_volume_graph(self, namespace: str) -> str:
@@ -944,6 +1532,232 @@ class StaticRCAActions(StaticTaskActions):
         )
         return summary
 
+    def _select_trace_peer_subset(self, namespace: str, component_type: str, role: str):
+        """Load trace data and restrict it to peers matching the requested level."""
+        df = self._load_trace_window(namespace)
+        if df.empty:
+            return df, f"No trace data found for namespace '{namespace}'", "cmdb_id"
+
+        comp_col = "cmdb_id" if role == "caller" else "dsName"
+        if component_type in {"all", "*", "any"}:
+            sub = df[df[comp_col].fillna("").astype(str).str.strip() != ""]
+            if sub.empty:
+                return sub, f"No trace data for {component_type} ({role})", comp_col
+            return sub, "", comp_col
+
+        level_members = self.component_levels.get(component_type)
+        if level_members:
+            level_set = set(level_members)
+            sub = df[df[comp_col].fillna("").isin(level_set)]
+            if sub.empty:
+                # Suffix match for "node-X.pod_name" format
+                sub = df[df[comp_col].fillna("").apply(
+                    lambda x: str(x).split(".", 1)[-1] if "." in str(x) else ""
+                ).isin(level_set)]
+        else:
+            sub = df[df[comp_col].fillna("").str.startswith(component_type + "_")]
+            if sub.empty:
+                sub = df[df[comp_col].fillna("").str.startswith(component_type + "-")]
+
+        if sub.empty:
+            return sub, f"No trace data for {component_type} ({role})", comp_col
+        return sub, "", comp_col
+
+    def _plot_trace_peer_metric(
+        self,
+        namespace: str,
+        component_type: str,
+        role: str,
+        metric: str,
+        title_suffix: str,
+        ylabel: str,
+        fname_suffix: str,
+    ) -> str:
+        """Render a single trace metric per peer so analysts can inspect it alone."""
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+
+        sub, error, comp_col = self._select_trace_peer_subset(
+            namespace, component_type, role,
+        )
+        if error:
+            return error
+
+        components = sorted(sub[comp_col].unique())
+        fig, ax = plt.subplots(figsize=(14, 5))
+        label_points: list[tuple[object, float, str, str]] = []
+
+        for ci, comp in enumerate(components):
+            comp_df = sub[sub[comp_col] == comp]
+            color = _PEER_COLORS[ci % len(_PEER_COLORS)]
+            ls = _PEER_LINESTYLES[ci // len(_PEER_COLORS)]
+
+            if metric == "latency":
+                series = comp_df.groupby("bucket")["elapsedTime"].median()
+            elif metric == "error_rate":
+                series = comp_df.groupby("bucket")["success_bool"].apply(
+                    lambda s: (1 - s.mean()) * 100
+                )
+            elif metric == "volume":
+                series = comp_df.groupby("bucket").size()
+            else:
+                raise ValueError(f"Unsupported trace peer metric: {metric}")
+
+            ax.plot(
+                series.index,
+                series.values,
+                label=comp,
+                linewidth=0.8,
+                alpha=0.85,
+                color=color,
+                linestyle=ls,
+                marker="o",
+                markersize=2.5,
+            )
+
+            if metric == "latency" and len(series.index) > 0:
+                try:
+                    peak_idx = series.idxmax()
+                    peak_val = float(series.max())
+                    label_points.append((peak_idx, peak_val, str(comp), color))
+                except Exception:
+                    pass
+
+        if metric == "latency" and label_points:
+            y_min, y_max = ax.get_ylim()
+            y_span = max(y_max - y_min, 1.0)
+            x_thresh = 1.0 / (24.0 * 60.0)  # ~1 minute in matplotlib date units
+            y_thresh = max(0.02 * y_span, 5.0)
+            label_points.sort(
+                key=lambda item: (mdates.date2num(item[0]), float(item[1]))
+            )
+            cluster_offsets: list[int] = []
+            placed_xy: list[tuple[float, float]] = []
+            for peak_idx, peak_val, _comp, _color in label_points:
+                x_num = mdates.date2num(peak_idx)
+                offset_level = 0
+                for placed_x, placed_y in placed_xy:
+                    if abs(x_num - placed_x) <= x_thresh and abs(peak_val - placed_y) <= y_thresh:
+                        offset_level += 1
+                cluster_offsets.append(offset_level)
+                placed_xy.append((x_num, peak_val))
+
+            for (peak_idx, peak_val, comp, color), offset_level in zip(label_points, cluster_offsets):
+                ax.text(
+                    peak_idx,
+                    peak_val + offset_level * (0.03 * y_span),
+                    comp,
+                    fontsize=7,
+                    color=color,
+                    alpha=0.9,
+                    ha="left",
+                    va="bottom",
+                    clip_on=True,
+                )
+
+        ax.set_title(
+            f"{component_type} {role} — {title_suffix}",
+            fontsize=13,
+            fontweight="bold",
+        )
+        ax.set_xlabel("Time (UTC)")
+        ax.set_ylabel(ylabel)
+        ax.grid(True, alpha=0.3)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        ax.legend(loc="upper right", fontsize=7, ncol=2)
+
+        plt.tight_layout()
+        out_dir = self.save_dir or _os.path.join(self.work_dir, "static_metric_output")
+        _os.makedirs(out_dir, exist_ok=True)
+        fname = f"trace_{component_type}_{role}_{fname_suffix}.png"
+        file_path = _os.path.join(out_dir, fname)
+        fig.savefig(file_path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        return file_path
+
+    @visualization
+    @trace_action
+    def get_trace_latency_peer_graph(self, namespace: str, component_type: str,
+                                     role: str = "caller") -> str:
+        """Plot trace latency (p50) per component on its own graph.
+
+        Use this when you want to inspect latency spikes separately from
+        error-rate behavior.
+
+        Args:
+            namespace: e.g. "static-telecom"
+            component_type: "docker", "os", "db", "redis"
+            role: "caller" (cmdb_id) or "callee" (dsName)
+
+        Returns:
+            File path to the generated PNG image.
+        """
+        return self._plot_trace_peer_metric(
+            namespace=namespace,
+            component_type=component_type,
+            role=role,
+            metric="latency",
+            title_suffix="Trace Latency (p50)",
+            ylabel="Elapsed Time (ms)",
+            fname_suffix="latency",
+        )
+
+    @visualization
+    @trace_action
+    def get_trace_error_peer_graph(self, namespace: str, component_type: str,
+                                   role: str = "caller") -> str:
+        """Plot trace error rate per component on its own graph.
+
+        Use this when you want to inspect errors separately from latency
+        so a large latency spike does not dominate the visual scan.
+
+        Args:
+            namespace: e.g. "static-telecom"
+            component_type: "docker", "os", "db", "redis"
+            role: "caller" (cmdb_id) or "callee" (dsName)
+
+        Returns:
+            File path to the generated PNG image.
+        """
+        return self._plot_trace_peer_metric(
+            namespace=namespace,
+            component_type=component_type,
+            role=role,
+            metric="error_rate",
+            title_suffix="Trace Error Rate",
+            ylabel="Error Rate (%)",
+            fname_suffix="error_rate",
+        )
+
+    @visualization
+    @trace_action
+    def get_trace_volume_peer_graph(self, namespace: str, component_type: str,
+                                    role: str = "caller") -> str:
+        """Plot trace span volume per component for a specific peer family.
+
+        Use this when you want trace volume split by peer type (for example
+        docker callers or db callees) instead of a single global total-volume chart.
+
+        Args:
+            namespace: e.g. "static-telecom"
+            component_type: "docker", "os", "db", "redis"
+            role: "caller" (cmdb_id) or "callee" (dsName)
+
+        Returns:
+            File path to the generated PNG image.
+        """
+        return self._plot_trace_peer_metric(
+            namespace=namespace,
+            component_type=component_type,
+            role=role,
+            metric="volume",
+            title_suffix="Trace Volume",
+            ylabel="Span Count",
+            fname_suffix="volume",
+        )
+
     @visualization
     @trace_action
     def get_trace_peer_graph(self, namespace: str, component_type: str,
@@ -963,26 +1777,11 @@ class StaticRCAActions(StaticTaskActions):
         import matplotlib.pyplot as plt
         import matplotlib.dates as mdates
 
-        df = self._load_trace_window(namespace)
-        if df.empty:
-            return f"No trace data found for namespace '{namespace}'"
-
-        comp_col = "cmdb_id" if role == "caller" else "dsName"
-        level_members = self.component_levels.get(component_type)
-        if level_members:
-            level_set = set(level_members)
-            sub = df[df[comp_col].fillna("").isin(level_set)]
-            if sub.empty:
-                # Suffix match for "node-X.pod_name" format
-                sub = df[df[comp_col].fillna("").apply(
-                    lambda x: str(x).split(".", 1)[-1] if "." in str(x) else ""
-                ).isin(level_set)]
-        else:
-            sub = df[df[comp_col].fillna("").str.startswith(component_type + "_")]
-            if sub.empty:
-                sub = df[df[comp_col].fillna("").str.startswith(component_type + "-")]
-        if sub.empty:
-            return f"No trace data for {component_type} ({role})"
+        sub, error, comp_col = self._select_trace_peer_subset(
+            namespace, component_type, role,
+        )
+        if error:
+            return error
 
         components = sorted(sub[comp_col].unique())
 

@@ -72,12 +72,8 @@ Use `get_kpi_peer_graph(namespace, component_type, kpi_name)` to visually scan f
   - db: Sess_Connect, Session_pct, On_Off_State
 After each graph, the vision critic will identify outliers. Collect all outlier components found across all types.
 
-Also use trace graphs to screen for network faults:
-  - `get_trace_volume_graph(namespace)`: plots total span count per minute.
-  - `get_trace_peer_graph(namespace, component_type)`: plots p50 latency and error rate per component. Check both "docker" and "os" as component_type.
-    - Latency spike + errors → network delay; volume drop without latency spike → network loss.
-
-IMPORTANT: Network faults originate at the OS (node) level, NOT docker. If trace graphs show a docker with latency spikes or errors indicating a network issue, you MUST check os ICMP_ping with `get_kpi_peer_graph` to find which OS node is the actual root cause. Docker containers run on OS nodes — the docker is just showing symptoms, the OS node is the real culprit.
+Do NOT use trace graphs during initial localization. Stage 1 localization must be based on metrics only.
+Trace graphs are allowed only after metric-based candidates have already been localized and you are doing follow-up causal analysis or expansion.
 
 **Step 1b — Filter outliers**
 Review the collected outliers and REMOVE false positives:
@@ -114,11 +110,8 @@ Use `execute()` to load metric CSVs and compute per-component statistics. You MU
   - db: Sess_Connect, Session_pct, On_Off_State
 For each component type, compare each component's fault-window values against its baseline (pre-fault) and against peers.
 
-Also check trace data for network fault screening:
-  - Use `execute()` to load trace_span.csv, bucket by 1-minute, and compute total span volume per minute plus per-component p50 latency and error rate.
-  - A latency spike on specific docker(s) + errors → network delay; volume drop without latency spike → network loss.
-
-IMPORTANT: Network faults originate at the OS (node) level, NOT docker. If trace data shows a docker with latency issues indicating a network problem, you MUST check os-level KPIs (ICMP_ping) to find which OS node is the actual root cause. Docker containers run on OS nodes — the docker is just showing symptoms, the OS node is the real culprit.
+Do NOT use trace data during initial localization. Stage 1 localization must be based on metrics only.
+Trace analysis is allowed only after metric-based candidates have already been localized and you are doing follow-up causal analysis or expansion.
 
 **Step 1b — Filter outliers**
 Review the collected outliers and REMOVE false positives:

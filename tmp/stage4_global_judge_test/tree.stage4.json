@@ -1,0 +1,238 @@
+{
+  "nodes": [
+    {
+      "id": "root",
+      "stage": "root",
+      "component": "System Failure",
+      "reason": null,
+      "time": null,
+      "status": "active",
+      "confidence": 0.0,
+      "evidence": "",
+      "parent_id": null,
+      "children": [
+        "localize_0",
+        "localize_1",
+        "localize_2",
+        "localize_3"
+      ],
+      "kpi": null,
+      "step": 0,
+      "severity": 0.0,
+      "root_cause_reason_class": null,
+      "relation": null,
+      "localized_match": false,
+      "localized_time": null,
+      "localized_severity": 0.0
+    },
+    {
+      "id": "localize_0",
+      "stage": "localize",
+      "component": "docker_006",
+      "reason": "Trace Error Rate (%)",
+      "time": "2020-05-21 17:49:00",
+      "status": "candidate",
+      "confidence": 0.0,
+      "evidence": "error rate spike on docker_006 around 17:49",
+      "parent_id": "root",
+      "children": [
+        "expand_0"
+      ],
+      "kpi": "Trace Error Rate (%)",
+      "step": 1,
+      "severity": 92.0,
+      "root_cause_reason_class": null,
+      "relation": null,
+      "localized_match": false,
+      "localized_time": null,
+      "localized_severity": 0.0
+    },
+    {
+      "id": "localize_1",
+      "stage": "localize",
+      "component": "docker_006",
+      "reason": "Trace Latency (p50)",
+      "time": "2020-05-21 17:48:00",
+      "status": "candidate",
+      "confidence": 0.0,
+      "evidence": "trace latency increase on docker_006 around 17:48",
+      "parent_id": "root",
+      "children": [
+        "expand_1"
+      ],
+      "kpi": "Trace Latency (p50)",
+      "step": 2,
+      "severity": 95.0,
+      "root_cause_reason_class": null,
+      "relation": null,
+      "localized_match": false,
+      "localized_time": null,
+      "localized_severity": 0.0
+    },
+    {
+      "id": "localize_2",
+      "stage": "localize",
+      "component": "os_018",
+      "reason": "Sent_queue",
+      "time": "2020-05-21 17:51:00",
+      "status": "candidate",
+      "confidence": 0.0,
+      "evidence": "small queue increase on os_018",
+      "parent_id": "root",
+      "children": [
+        "expand_2"
+      ],
+      "kpi": "Sent_queue",
+      "step": 3,
+      "severity": 76.0,
+      "root_cause_reason_class": null,
+      "relation": null,
+      "localized_match": false,
+      "localized_time": null,
+      "localized_severity": 0.0
+    },
+    {
+      "id": "localize_3",
+      "stage": "localize",
+      "component": "os_022",
+      "reason": "Received_queue",
+      "time": "2020-05-21 17:46:00",
+      "status": "candidate",
+      "confidence": 0.0,
+      "evidence": "received queue rises but remains low absolute level",
+      "parent_id": "root",
+      "children": [],
+      "kpi": "Received_queue",
+      "step": 4,
+      "severity": 74.0,
+      "root_cause_reason_class": null,
+      "relation": null,
+      "localized_match": false,
+      "localized_time": null,
+      "localized_severity": 0.0
+    },
+    {
+      "id": "expand_0",
+      "stage": "expand",
+      "component": "db_003",
+      "reason": null,
+      "time": "2020-05-21 17:47:23",
+      "status": "candidate",
+      "confidence": 0.88,
+      "evidence": "kpi=Session_pct | value=sustained high | value_is_problematic=true | value_judgment=DB connection pressure is materially elevated",
+      "parent_id": "localize_0",
+      "children": [],
+      "kpi": null,
+      "step": 5,
+      "severity": 0.0,
+      "root_cause_reason_class": null,
+      "relation": "call_downstream, shared_resource",
+      "localized_match": false,
+      "localized_time": null,
+      "localized_severity": 0.0
+    },
+    {
+      "id": "expand_1",
+      "stage": "expand",
+      "component": "db_003",
+      "reason": "db connection limit",
+      "time": "2020-05-21 17:47:23",
+      "status": "confirmed",
+      "confidence": 0.86,
+      "evidence": "The downstream database db_003 shows sustained high Session_pct, indicating connection pressure consistent with a DB connection limit. This upstream bottleneck explains the increased latency (p50) at 17:48 and error rate spike at 17:49 observed on docker_006, which depends on db_003. | - docker_006 symptom nodes (localize_0/localize_1) show service-level errors/latency but are effects, not root causes.\n- OS queue nodes (os_018/os_022) have small/low-level queue changes and weaker signals, not aligned with the strong service degradation.\n- No evidence supports CPU faults, network delay/loss, or DB close events; the explicit DB connection pressure is the only concrete resource-level anomaly. | supporting_path=localize_1 -> expand_1",
+      "parent_id": "localize_1",
+      "children": [],
+      "kpi": null,
+      "step": 6,
+      "severity": 0.0,
+      "root_cause_reason_class": "db connection limit",
+      "relation": "call_downstream, shared_resource",
+      "localized_match": false,
+      "localized_time": null,
+      "localized_severity": 0.0
+    },
+    {
+      "id": "expand_2",
+      "stage": "expand",
+      "component": "docker_006",
+      "reason": null,
+      "time": "2020-05-21 17:49:00",
+      "status": "candidate",
+      "confidence": 0.94,
+      "evidence": "kpi=Trace Error Rate (%) | value=sharp rise | value_is_problematic=true | localized_hit=2020-05-21 17:48:00 | localized_severity=95 | clues=service-level latency and errors are stronger than OS queue signals",
+      "parent_id": "localize_2",
+      "children": [],
+      "kpi": null,
+      "step": 7,
+      "severity": 0.0,
+      "root_cause_reason_class": null,
+      "relation": "deploy_sibling",
+      "localized_match": true,
+      "localized_time": "2020-05-21 17:48:00",
+      "localized_severity": 95.0
+    }
+  ],
+  "events": [
+    {
+      "step": 0,
+      "action": "create",
+      "node_id": "root",
+      "ts": 1773722946.149534
+    },
+    {
+      "step": 1,
+      "action": "create",
+      "node_id": "localize_0",
+      "ts": 1773722946.149538
+    },
+    {
+      "step": 2,
+      "action": "create",
+      "node_id": "localize_1",
+      "ts": 1773722946.149539
+    },
+    {
+      "step": 3,
+      "action": "create",
+      "node_id": "localize_2",
+      "ts": 1773722946.1495402
+    },
+    {
+      "step": 4,
+      "action": "create",
+      "node_id": "localize_3",
+      "ts": 1773722946.1495419
+    },
+    {
+      "step": 5,
+      "action": "create",
+      "node_id": "expand_0",
+      "ts": 1773722946.1495428
+    },
+    {
+      "step": 6,
+      "action": "create",
+      "node_id": "expand_1",
+      "ts": 1773722946.149545
+    },
+    {
+      "step": 7,
+      "action": "create",
+      "node_id": "expand_2",
+      "ts": 1773722946.149547
+    },
+    {
+      "step": 8,
+      "action": "confirm",
+      "node_id": "expand_1",
+      "ts": 1773722958.229915,
+      "confidence": 0.86
+    }
+  ],
+  "trace_edges": [
+    {
+      "from": "docker_006",
+      "to": "db_003"
+    }
+  ]
+}

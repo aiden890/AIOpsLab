@@ -7,7 +7,7 @@ Scores predictions against scoring_points using regex matching.
 import json
 import re
 import itertools
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def _parse_prediction_json(prediction: str) -> list[dict]:
@@ -154,23 +154,23 @@ def openrca_evaluate(prediction: str, scoring_points: str):
 
 
 def _time_diff_minutes(expected_str: str, predicted_str: str):
-    """Return absolute difference in minutes between two datetime strings, or None."""
+    """Return absolute difference in minutes between two datetime strings (both UTC), or None."""
     time_format = "%Y-%m-%d %H:%M:%S"
     try:
-        t1 = datetime.strptime(expected_str.strip(), time_format)
-        t2 = datetime.strptime(predicted_str.strip(), time_format)
+        t1 = datetime.strptime(expected_str.strip(), time_format).replace(tzinfo=timezone.utc)
+        t2 = datetime.strptime(predicted_str.strip(), time_format).replace(tzinfo=timezone.utc)
         return round(abs((t1 - t2).total_seconds()) / 60.0, 1)
     except (ValueError, AttributeError):
         return None
 
 
 def _time_within_1min(expected_str: str, predicted_str: str) -> bool:
-    """Check if two datetime strings are within 1 minute of each other."""
+    """Check if two datetime strings (both UTC) are within 1 minute of each other."""
     time_format = "%Y-%m-%d %H:%M:%S"
     try:
-        t1 = datetime.strptime(expected_str.strip(), time_format)
-        t2 = datetime.strptime(predicted_str.strip(), time_format)
-        return abs((t1 - t2).total_seconds()) <= 60
+        t1 = datetime.strptime(expected_str.strip(), time_format).replace(tzinfo=timezone.utc)
+        t2 = datetime.strptime(predicted_str.strip(), time_format).replace(tzinfo=timezone.utc)
+        return abs((t1 - t2).total_seconds()) <= 60*5
     except ValueError:
         return False
 

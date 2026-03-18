@@ -371,7 +371,9 @@ openspec/
 prompt/
 results/
 tests/
-
+experiments/telemetry_ablation/
+*.csv
+prefiltered_telemetry/
 
 # Aiden
 playground_aiden/
@@ -387,3 +389,4 @@ experiments/telemetry_ablation2/
 experiments/telemetry_ablation3_results/
 experiments/telemetry_ablation4_results/
 experiments/telemetry_ablation5_results/
+*.png

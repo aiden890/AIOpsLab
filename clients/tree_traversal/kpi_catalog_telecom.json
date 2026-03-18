@@ -1,0 +1,61 @@
+{
+  "kpis": {
+    "app": [],
+    "container": [
+      "container_cpu_used",
+      "container_mem_used"
+    ],
+    "middleware": [
+      "Redis_key_count",
+      "connected_clients",
+      "expired_keys",
+      "instantaneous_input_kbps",
+      "instantaneous_ops_per_sec",
+      "instantaneous_output_kbps",
+      "keyspace_hits",
+      "keyspace_misses",
+      "maxmemory",
+      "mem_fragmentation_ratio",
+      "total_commands_processed",
+      "total_connections_received",
+      "used_cpu_sys",
+      "used_cpu_user",
+      "used_memory",
+      "used_memory_peak",
+      "used_memory_rss"
+    ],
+    "node": [
+      "Disk_await",
+      "Disk_io_util",
+      "ICMP_ping",
+      "Incoming_network_traffic",
+      "Outgoing_network_traffic",
+      "Received_packets",
+      "Received_queue",
+      "Recv_total",
+      "Send_total",
+      "Sent_packets",
+      "Sent_queue",
+      "System_block_queue_length",
+      "System_wait_queue_length"
+    ],
+    "service": [
+      "DFParaWrite_Per_Sec",
+      "DbFile_Used_Pct",
+      "DbTime",
+      "On_Off_State",
+      "Physical_Read_Per_Sec",
+      "Proc_Used_Pct",
+      "Proc_User_Used_Pct",
+      "Redo_Per_Sec",
+      "Row_Lock",
+      "SEQ_Used_Pct",
+      "SctRead_Per_Sec",
+      "SeqRead_Per_Sec",
+      "Sess_Active",
+      "Sess_Connect",
+      "Session_pct",
+      "tnsping_result_time"
+    ]
+  }
+}

@@ -21,16 +21,16 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 _TELECOM_CALL_GRAPH = {
-    "os_021": ["docker_003", "docker_004"],
-    "os_022": ["docker_001", "docker_002"],
-    "docker_001": ["docker_007", "docker_008", "db_007", "db_009"],
-    "docker_002": ["docker_007", "docker_008", "db_007", "db_009"],
-    "docker_003": ["docker_005", "docker_006", "db_007", "db_009"],
-    "docker_004": ["docker_005", "docker_006", "db_007", "db_009"],
-    "docker_005": ["db_003"],
-    "docker_006": ["db_003"],
-    "docker_007": ["db_003"],
-    "docker_008": ["db_003"],
+    # "os_021": ["docker_003", "docker_004"],
+    # "os_022": ["docker_001", "docker_002"],
+    # "docker_001": ["docker_007", "docker_008", "db_007", "db_009"],
+    # "docker_002": ["docker_007", "docker_008", "db_007", "db_009"],
+    # "docker_003": ["docker_005", "docker_006", "db_007", "db_009"],
+    # "docker_004": ["docker_005", "docker_006", "db_007", "db_009"],
+    # "docker_005": ["db_003"],
+    # "docker_006": ["db_003"],
+    # "docker_007": ["db_003"],
+    # "docker_008": ["db_003"],
 }
 
 # Host -> components on that host (from deployment topology).
@@ -49,9 +49,9 @@ _TELECOM_DEPLOYMENT_GRAPH = {
 }
 
 _TELECOM_SHARED_RESOURCE_GRAPH = {
-    "db_003": ["docker_005", "docker_006", "docker_007", "docker_008"],
-    "db_007": ["docker_001", "docker_002", "docker_003", "docker_004"],
-    "db_009": ["docker_001", "docker_002", "docker_003", "docker_004"],
+    # "db_003": ["docker_005", "docker_006", "docker_007", "docker_008"],
+    # "db_007": ["docker_001", "docker_002", "docker_003", "docker_004"],
+    # "db_009": ["docker_001", "docker_002", "docker_003", "docker_004"],
 }
 
 # ---------------------------------------------------------------------------

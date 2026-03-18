@@ -35,9 +35,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from aiopslab.orchestrator.static_orchestrator import StaticOrchestrator
 from aiopslab.orchestrator.static_actions.rca_executor import StaticRCAActionsWithExecutor
 from aiopslab.orchestrator.static_actions.kg import (
-    build_trace_kg, serialize_trace_kg,
-    build_metric_kg,
-    extract_components_from_instruction, format_rag_context,
     build_fault_timeline, format_for_instruction, format_for_result, format_for_summary,
     format_for_metrics, format_for_traces,
 )
@@ -82,57 +79,9 @@ def append_score(scores_path: Path, row: dict):
             writer.writerow(row)
 
 
-def build_kg_context(
-    actions: StaticRCAActionsWithExecutor,
-    namespace: str,
-    all_components: list[str] | None,
-    kg_format: str,
-    kg_top_k: int,
-    query_time_range: dict | None = None,
-) -> tuple[str, str]:
-    """Build Trace KG from telemetry and serialize to text.
-
-    Uses the actions' static_app to fetch raw trace data, then builds KG.
-
-    Args:
-        query_time_range: {"start": unix_ts, "end": unix_ts, ...} from QueryResult.
-                          Filters traces to the task's time window.
-
-    Returns:
-        (serialized_kg_text, propagation_suspect_name)
-    """
-    start_time = query_time_range.get("start") if query_time_range else None
-    end_time = query_time_range.get("end") if query_time_range else None
-
-    if start_time or end_time:
-        logger.info(f"Fetching traces in time range: {start_time} ~ {end_time}")
-    else:
-        logger.warning("No query_time_range provided — using all trace data")
-
-    raw_trace_df = actions.static_app.fetch_traces_df(
-        namespace, start_time=start_time, end_time=end_time,
-    )
-    if raw_trace_df.empty:
-        logger.warning(f"No trace data found for namespace '{namespace}'")
-        return "", ""
-
-    logger.info(f"Building Trace KG from {len(raw_trace_df)} spans...")
-
-    kg = build_trace_kg(
-        trace_df=raw_trace_df,
-        raw_trace_df=raw_trace_df,
-        all_components=all_components,
-        top_k=kg_top_k,
-    )
-
-    text = serialize_trace_kg(kg, fmt=kg_format, top_k=kg_top_k)
-
-    logger.info(
-        f"Trace KG built: {len(kg.components)} components, {len(kg.edges)} edges, "
-        f"top anomaly={kg.propagation_suspect} ({kg.propagation_pattern})"
-    )
-
-    return text, kg.propagation_suspect or ""
+def _no_op_extract_components(_instruction: str, _dataset_type: str) -> list:
+    """Stub: no component extraction (trace/metric KG builders removed)."""
+    return []
 
 
 def parse_args():
@@ -238,9 +187,11 @@ def run_single_problem(pid: str, args, results_dir: Path, eval_id: str,
         all_components = possible_rca.get("components", []) if possible_rca else None
 
         # =============================================================
-        # Build Metric KG and wire up RAG injector for executor
+        # Build Fault Timeline + wire executor pipeline injectors
         # =============================================================
         if use_executor:
+            _sprint = orchestrator.sprint
+            _dt = dataset_key.replace("openrca_", "")
             metric_df = actions.static_app.fetch_metrics_df(
                 problem.namespace,
                 start_time=query_time_range.get("start") if query_time_range else None,
@@ -251,36 +202,6 @@ def run_single_problem(pid: str, args, results_dir: Path, eval_id: str,
                 start_time=query_time_range.get("start") if query_time_range else None,
                 end_time=query_time_range.get("end") if query_time_range else None,
             )
-            metric_kg = build_metric_kg(metric_df, trace_df_for_rag, dataset_type=dataset_key.replace("openrca_", ""))
-
-            _sprint = orchestrator.sprint
-
-            _rag_detail = args.rag_detail
-
-            def _rag_injector(instruction: str, _kg=metric_kg, _dt=dataset_key.replace("openrca_", ""), _sp=_sprint, _detail=_rag_detail) -> str:
-                comps = extract_components_from_instruction(instruction, _dt)
-                if not comps:
-                    return instruction
-                ctx = format_rag_context(_kg, comps, detail=_detail)
-                if not ctx:
-                    return instruction
-                _sp._log(
-                    f"\n{'='*60}\n"
-                    f"🔍 [RAG] Metric context injected for: {', '.join(comps)}\n"
-                    f"{'='*60}\n"
-                    f"{ctx}\n"
-                    f"{'='*60}"
-                )
-                return f"{instruction}\n\n{ctx}"
-
-            actions.set_rag_injector(_rag_injector)
-
-            logger.info(f"Metric KG built: {len(metric_kg.component_profiles)} components, RAG injector set")
-
-            # =============================================================
-            # Build Fault Timeline + wire 3 executor pipeline injectors
-            # =============================================================
-            _dt = dataset_key.replace("openrca_", "")
             fault_timeline = build_fault_timeline(
                 metric_df=metric_df,
                 trace_df=trace_df_for_rag,
@@ -307,11 +228,11 @@ def run_single_problem(pid: str, args, results_dir: Path, eval_id: str,
                 f"{'='*60}"
             )
 
-            # ① Wrap existing RAG injector to also inject fault timeline data
-            _orig_rag = _rag_injector
+            # ① RAG injector: identity (metric KG removed); timeline injector adds fault-window data
+            _orig_rag = lambda x: x
             def _timeline_rag_injector(instruction: str, _orig=_orig_rag, _tl=fault_timeline, _dt2=_dt, _sp=_sprint) -> str:
                 instruction = _orig(instruction)
-                comps = extract_components_from_instruction(instruction, _dt2)
+                comps = _no_op_extract_components(instruction, _dt2)
                 if not comps:
                     return instruction
                 ctx = format_for_instruction(_tl, comps)
@@ -328,7 +249,7 @@ def run_single_problem(pid: str, args, results_dir: Path, eval_id: str,
 
             # ③ Summary injector (before executor LLM summary)
             def _timeline_summary_injector(result: str, _tl=fault_timeline, _dt2=_dt, _sp=_sprint) -> str:
-                comps = extract_components_from_instruction(result, _dt2)
+                comps = _no_op_extract_components(result, _dt2)
                 if not comps:
                     return result
                 ctx = format_for_summary(_tl, comps)
@@ -347,7 +268,7 @@ def run_single_problem(pid: str, args, results_dir: Path, eval_id: str,
 
             # ② Result enricher (result → controller)
             def _timeline_result_enricher(result: str, _tl=fault_timeline, _dt2=_dt, _sp=_sprint) -> str:
-                comps = extract_components_from_instruction(result, _dt2)
+                comps = _no_op_extract_components(result, _dt2)
                 if not comps:
                     return result
                 ctx = format_for_result(_tl, comps)
@@ -390,24 +311,6 @@ def run_single_problem(pid: str, args, results_dir: Path, eval_id: str,
 
             # ⑤ Traces enricher — disabled (controller no longer calls get_traces directly)
             # actions.set_traces_enricher(_traces_enricher)
-
-        # =============================================================
-        # Build Trace KG (saved for debugging only)
-        # =============================================================
-        kg_text, _ = build_kg_context(
-            actions=actions,
-            namespace=problem.namespace,
-            all_components=all_components,
-            kg_format=args.kg_format,
-            kg_top_k=args.kg_top_k,
-            query_time_range=query_time_range,
-        )
-
-        # Save KG text for debugging
-        kg_path = task_save_dir / "trace_kg.txt"
-        if kg_text:
-            kg_path.write_text(kg_text)
-            logger.info(f"Trace KG saved to {kg_path}")
 
         agent.init_context(
             problem_desc, instructs, apis,

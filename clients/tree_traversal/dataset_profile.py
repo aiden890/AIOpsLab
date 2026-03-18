@@ -123,11 +123,15 @@ _TELECOM_KPIS_BY_TYPE: dict[str, list[str]] = {
     ],
     "os": [
         "ICMP_ping",
+        "Disk_io_util",
+        "Sent_queue",
+        "Received_queue",
     ],
     "db": [
         "Sess_Connect",
-        "Session_pct",
+        "Proc_Used_Pct",
         "On_Off_State",
+        "tnsping_result_time",
     ],
 }
 
@@ -135,9 +139,16 @@ _TELECOM_KPI_TO_REASONS: dict[str, list[str]] = {
     "container_cpu_used":  ["CPU fault"],
     "container_mem_used":  [],
     "ICMP_ping":           ["network delay", "network loss"],
+    "Memory_used_pct":     [],
+    "Disk_io_util":        [],
+    "Sent_queue":          ["network delay", "network loss"],
+    "Received_queue":      ["network delay", "network loss"],
     "Sess_Connect":        ["db connection limit"],
     "Session_pct":         ["db connection limit"],
+    "Proc_Used_Pct":       ["db connection limit"],
+    "Proc_User_Used_Pct":  ["db connection limit"],
     "On_Off_State":        ["db close"],
+    "tnsping_result_time": ["db close", "network delay"],
     "trace_latency":       ["network delay"],
     "trace_errors":        ["network loss"],
 }

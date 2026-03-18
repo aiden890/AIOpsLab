@@ -164,7 +164,7 @@ def run_controller_stage(
                     obs = (
                         f"[{stage_name}] Rejected: component_type must match the candidate's level. "
                         f"The candidate is at level {component_level!r}, but you used component_type={comp_type!r}. "
-                        f"For get_kpi_peer_graph and get_trace_peer_graph use component_type={component_level!r}. "
+                        f"For get_kpi_peer_graph, get_trace_volume_peer_graph, get_trace_latency_peer_graph, get_trace_error_peer_graph, and get_trace_peer_graph use component_type={component_level!r}. "
                         "No chart was generated. Please retry with the correct component_type."
                     )
                     if sprint:
@@ -174,12 +174,12 @@ def run_controller_stage(
 
             # Deep dive / expand stage: only allow execute() (plus submit). Any other action
             # should be rejected so the agent does not waste tokens on visualization
-            # tools that it cannot see (e.g. get_kpi_peer_graph, get_trace_peer_graph).
+            # tools that it cannot see (e.g. get_kpi_peer_graph, trace peer graph actions).
             if stage_name in ("deep_dive", "expand") and api_name not in ("execute", "submit"):
                 obs = (
                     f"[{stage_name}] Rejected action {api_name!r}: during {stage_name} you MUST "
                     "only use execute() to analyze telemetry tables and submit to conclude. "
-                    "Do not call visualization actions like get_kpi_peer_graph or get_trace_peer_graph."
+                    "Do not call visualization actions like get_kpi_peer_graph, get_trace_volume_peer_graph, get_trace_latency_peer_graph, get_trace_error_peer_graph, or get_trace_peer_graph."
                 )
                 if sprint:
                     sprint.service_detail(obs)

@@ -47,13 +47,8 @@ Use `get_kpi_peer_graph(namespace, component_type, kpi_name)` to visually scan f
 
 After each graph, the vision critic will identify outliers. Collect all outlier components found across all levels.
 
-Also use trace graphs to screen for network faults. You MUST call these whenever you suspect
-any network-related root cause (latency, loss, packet retransmission/corruption):
-  - `get_trace_volume_graph(namespace)`: plots total span count per minute.
-  - `get_trace_peer_graph(namespace, "pod")`: plots p50 latency and error rate per pod (cmdb_id in trace_span.csv).
-    - Latency spike + errors on a pod or service → "container network latency" or
-      "container network packet retransmission/corruption".
-    - Volume drop without latency spike → "container packet loss" or downstream loss.
+Do NOT use trace graphs during initial localization. Initial localization must be based on metrics only.
+Trace graphs are allowed only after metric-based candidates have already been localized and you are doing follow-up causal analysis.
 
 IMPORTANT about node-pod mapping:
   - Pod metric cmdb_id format is "node-X.pod-name" (e.g., node-5.frontend-1). This tells you WHICH node each pod runs on.

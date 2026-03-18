@@ -55,15 +55,15 @@ A **Job** is simply **one submission by a user** - it can be small or large.
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │              LLM PRETRAINING (e.g., GPT-like model)             │
-│                                                                  │
+│                                                                 │
 │   Job 1          Job 2          Job 3          Job 4            │
-│   ┌─────┐        ┌─────┐        ┌─────┐        ┌─────┐         │
-│   │Step │   →    │Step │   →    │Step │   →    │Step │         │
-│   │0-10K│        │10K- │        │20K- │        │30K- │         │
-│   │     │        │20K  │        │30K  │        │40K  │         │
-│   └──┬──┘        └──┬──┘        └──┬──┘        └──┬──┘         │
-│      │              │              │              │              │
-│      ▼              ▼              ▼              ▼              │
+│   ┌─────┐        ┌─────┐        ┌─────┐        ┌─────┐          │
+│   │Step │   →    │Step │   →    │Step │   →    │Step │          │
+│   │0-10K│        │10K- │        │20K- │        │30K- │          │
+│   │     │        │20K  │        │30K  │        │40K  │          │
+│   └──┬──┘        └──┬──┘        └──┬──┘        └──┬──┘          │
+│      │              │              │              │             │
+│      ▼              ▼              ▼              ▼             │
 │   checkpoint     checkpoint     checkpoint     checkpoint       │
 │   saved          saved          saved          saved            │
 └─────────────────────────────────────────────────────────────────┘

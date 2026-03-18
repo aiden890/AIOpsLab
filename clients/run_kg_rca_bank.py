@@ -20,9 +20,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from aiopslab.orchestrator.static_orchestrator import StaticOrchestrator
 from aiopslab.orchestrator.static_actions.rca_executor import StaticRCAActionsWithExecutor
-from aiopslab.orchestrator.static_actions.kg import (
-    build_trace_kg, serialize_trace_kg,
-)
 from clients.openrca_rca.kg_rca_agent import KGRCAAgent
 from clients.openrca_rca.prompts import get_basic_prompt
 from clients.openrca_rca.prompts.telemetry_guide import build_executor_telemetry_guide
@@ -154,34 +151,6 @@ def run_single_problem(pid: str, args, results_dir: Path, eval_id: str,
 
         possible_rca = dataset_config.get("possible_root_causes")
         all_components = possible_rca.get("components", []) if possible_rca else None
-
-        # Build Trace KG
-        start_time = query_time_range.get("start") if query_time_range else None
-        end_time = query_time_range.get("end") if query_time_range else None
-
-        raw_trace_df = actions.static_app.fetch_traces_df(
-            problem.namespace, start_time=start_time, end_time=end_time,
-        )
-        kg_text = ""
-        if not raw_trace_df.empty:
-            logger.info(f"Building Trace KG from {len(raw_trace_df)} spans...")
-            kg = build_trace_kg(
-                trace_df=raw_trace_df,
-                raw_trace_df=raw_trace_df,
-                all_components=all_components,
-                top_k=args.kg_top_k,
-            )
-            kg_text = serialize_trace_kg(kg, fmt=args.kg_format, top_k=args.kg_top_k)
-            logger.info(
-                f"Trace KG built: {len(kg.components)} components, {len(kg.edges)} edges, "
-                f"top anomaly={kg.propagation_suspect} ({kg.propagation_pattern})"
-            )
-        else:
-            logger.warning(f"No trace data found for namespace '{problem.namespace}'")
-
-        kg_path = task_save_dir / "trace_kg.txt"
-        if kg_text:
-            kg_path.write_text(kg_text)
 
         # Init agent & run
         agent.init_context(

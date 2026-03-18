@@ -10,7 +10,7 @@ import sys
 import csv
 import argparse
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import defaultdict
 
 
@@ -39,8 +39,8 @@ def _signed_time_diff(row):
     if pred_s and gt_s:
         for fmt in _TIME_FMTS:
             try:
-                t_pred = datetime.strptime(pred_s[:19], fmt)
-                t_gt = datetime.strptime(gt_s[:19], fmt)
+                t_pred = datetime.strptime(pred_s[:19], fmt).replace(tzinfo=timezone.utc)
+                t_gt = datetime.strptime(gt_s[:19], fmt).replace(tzinfo=timezone.utc)
                 return round((t_pred - t_gt).total_seconds() / 60.0, 1)
             except ValueError:
                 continue
