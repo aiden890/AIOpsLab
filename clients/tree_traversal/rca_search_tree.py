@@ -34,6 +34,13 @@ class TreeNode:
     localized_match: bool = False
     localized_time: Optional[str] = None
     localized_severity: float = 0.0
+    # Deep-dive enrichment is stored on the original node (localize/expand) when available.
+    deep_dive_reason: Optional[str] = None
+    deep_dive_reason_class: Optional[str] = None
+    deep_dive_confidence: float = 0.0
+    deep_dive_time: Optional[str] = None
+    deep_dive_evidence: str = ""
+    deep_dive_checked_reasons: list[dict] = field(default_factory=list)
 
 
 class SearchTree:
@@ -208,10 +215,12 @@ class SearchTree:
             "metadata": metadata or {},
         }
         for existing in self.containment_groups:
-            if (
-                existing.get("container_node_id") == container_node_id
-                and existing.get("relation_family") == relation_family
-            ):
+            same_container = existing.get("container_node_id") == container_node_id
+            if container_node_id is None:
+                same_container = same_container and (
+                    existing.get("container_component") == container_component
+                )
+            if same_container and existing.get("relation_family") == relation_family:
                 merged = list(dict.fromkeys(existing.get("member_node_ids", []) + member_ids))
                 existing["member_node_ids"] = merged
                 if payload["label"]:
@@ -271,14 +280,25 @@ class SearchTree:
         best = self.get_best()
         if best is not None:
             return best
-        # No confirmed: pick among all nodes with confidence > 0 (including pruned deep_dive)
+        # No confirmed: pick among nodes with confidence/deep-dive evidence.
         candidates = [
             n for n in self.nodes.values()
-            if n.confidence > 0 and n.stage in ("deep_dive", "expand")
+            if (
+                (float(getattr(n, "confidence", 0.0) or 0.0) > 0.0)
+                or (float(getattr(n, "deep_dive_confidence", 0.0) or 0.0) > 0.0)
+            )
+            and n.id != "root"
         ]
         if not candidates:
             return None
-        return max(candidates, key=lambda n: (n.confidence, n.stage == "deep_dive"))
+        return max(
+            candidates,
+            key=lambda n: (
+                float(getattr(n, "deep_dive_confidence", 0.0) or 0.0),
+                float(getattr(n, "confidence", 0.0) or 0.0),
+                n.stage == "expand",
+            ),
+        )
 
     # ── persistence ───────────────────────────────────────────────────
 
@@ -296,6 +316,12 @@ class SearchTree:
                     "localized_match": getattr(n, "localized_match", False),
                     "localized_time": getattr(n, "localized_time", None),
                     "localized_severity": getattr(n, "localized_severity", 0.0),
+                    "deep_dive_reason": getattr(n, "deep_dive_reason", None),
+                    "deep_dive_reason_class": getattr(n, "deep_dive_reason_class", None),
+                    "deep_dive_confidence": getattr(n, "deep_dive_confidence", 0.0),
+                    "deep_dive_time": getattr(n, "deep_dive_time", None),
+                    "deep_dive_evidence": getattr(n, "deep_dive_evidence", ""),
+                    "deep_dive_checked_reasons": getattr(n, "deep_dive_checked_reasons", []),
                 }
                 for n in self.nodes.values()
             ],
@@ -343,6 +369,12 @@ class SearchTree:
                 localized_match=bool(nd.get("localized_match", False)),
                 localized_time=nd.get("localized_time"),
                 localized_severity=float(nd.get("localized_severity", 0.0)),
+                deep_dive_reason=nd.get("deep_dive_reason"),
+                deep_dive_reason_class=nd.get("deep_dive_reason_class"),
+                deep_dive_confidence=float(nd.get("deep_dive_confidence", 0.0) or 0.0),
+                deep_dive_time=nd.get("deep_dive_time"),
+                deep_dive_evidence=nd.get("deep_dive_evidence", ""),
+                deep_dive_checked_reasons=list(nd.get("deep_dive_checked_reasons", []) or []),
             )
             tree.nodes[node.id] = node
         return tree

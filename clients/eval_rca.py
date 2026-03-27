@@ -83,7 +83,7 @@ def analyze(rows, time_threshold):
         1 for r in rows
         if str(r.get("correct_component", "")).strip() == "True"
         and str(r.get("correct_reason", "")).strip() == "True"
-        and (lambda td: td is not None and 0 <= td <= time_threshold)(_signed_time_diff(r))
+        and (lambda td: td is not None and 0 <= td <= time_threshold )(_signed_time_diff(r))
     )
     print(f"  {'All correct':<14}  {all_correct:>8}  {total:>6}  {_pct(all_correct, total):>9}")
 

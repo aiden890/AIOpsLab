@@ -9,6 +9,9 @@ import pandas as _pd
 from datetime import datetime, timezone as _tz
 
 from aiopslab.orchestrator.static_actions.base import StaticTaskActions
+from aiopslab.orchestrator.static_actions.trace_path_renderer import (
+    get_trace_path_renderer,
+)
 from aiopslab.utils.actions import action, executor_action, metric_action, trace_action, visualization
 from aiopslab.utils.status import SubmissionStatus
 
@@ -24,6 +27,13 @@ _PEER_COLORS = [
     '#fffac8', '#ff6961',
 ]
 _PEER_LINESTYLES = ['-', '--', '-.', ':']
+
+
+def _safe_filename_fragment(text: str) -> str:
+    text = str(text or "").strip()
+    if not text:
+        return "unknown"
+    return _re.sub(r"[^A-Za-z0-9._-]+", "_", text)
 
 # ---------------------------------------------------------------------------
 # Trace call graph helpers
@@ -102,6 +112,65 @@ def _normalize_trace_schema(df: _pd.DataFrame) -> _pd.DataFrame:
     edges['dsName'] = edges['cmdb_id']
     edges['cmdb_id'] = edges['_parent_cmdb']
     return edges.drop(columns=['_parent_cmdb'])
+
+
+def _extract_edge_rows_id_pid(df: _pd.DataFrame) -> _pd.DataFrame:
+    """Extract caller->callee edge rows from id/pid (RPC: parent cmdb_id -> child cmdb_id).
+
+    child.pid = parent.id -> caller=parent.cmdb_id, callee=child.cmdb_id.
+    Returns DataFrame with columns: caller, callee, bucket, elapsedTime, success_bool.
+    """
+    id_col = 'id' if 'id' in df.columns else ('span_id' if 'span_id' in df.columns else None)
+    pid_col = (
+        'pid'
+        if 'pid' in df.columns
+        else ('parent_id' if 'parent_id' in df.columns else ('parent_span' if 'parent_span' in df.columns else None))
+    )
+    if id_col is None or pid_col is None or 'cmdb_id' not in df.columns:
+        return _pd.DataFrame()
+
+    df = df.copy()
+    df['_id'] = df[id_col].astype(str)
+    df['_pid'] = df[pid_col].fillna('').astype(str)
+    children = df[df['_pid'].str.strip() != ''].copy()
+    if children.empty:
+        return _pd.DataFrame()
+
+    parent_map = df.set_index('_id')['cmdb_id'].to_dict()
+    children['caller'] = children['_pid'].map(parent_map)
+    children['callee'] = children['cmdb_id'].astype(str).str.strip()
+    edges = children[children['caller'].notna() & (children['caller'] != children['callee'])].copy()
+    if edges.empty:
+        return _pd.DataFrame()
+
+    out = edges[['caller', 'callee', 'bucket']].copy()
+    dur_col = 'elapsedTime' if 'elapsedTime' in edges.columns else 'duration'
+    out['elapsedTime'] = edges[dur_col].astype(float) if dur_col in edges.columns else 0.0
+    out['success_bool'] = edges['success_bool'] if 'success_bool' in edges.columns else True
+    return out
+
+
+def _extract_edge_rows_dsname(df: _pd.DataFrame) -> _pd.DataFrame:
+    """Extract caller->callee edge rows from cmdb_id + dsName (JDBC: docker->db).
+
+    Telecom JDBC: cmdb_id=caller, dsName=callee.
+    Returns DataFrame with columns: caller, callee, bucket, elapsedTime, success_bool.
+    """
+    if 'cmdb_id' not in df.columns or 'dsName' not in df.columns:
+        return _pd.DataFrame()
+
+    df = df.copy()
+    df['caller'] = df['cmdb_id'].astype(str).str.strip()
+    df['callee'] = df['dsName'].astype(str).str.strip()
+    edges = df[(df['callee'] != '') & (df['caller'] != df['callee'])].copy()
+    if edges.empty:
+        return _pd.DataFrame()
+
+    out = edges[['caller', 'callee', 'bucket']].copy()
+    dur_col = 'elapsedTime' if 'elapsedTime' in edges.columns else 'duration'
+    out['elapsedTime'] = edges[dur_col].astype(float) if dur_col in edges.columns else 0.0
+    out['success_bool'] = edges['success_bool'] if 'success_bool' in edges.columns else True
+    return out
 
 
 def _compute_network_gap(raw_df: _pd.DataFrame) -> dict:
@@ -767,6 +836,30 @@ class StaticRCAActions(StaticTaskActions):
                 f"Available KPIs for component_type '{component_type}': {avail_kpis}"
             )
 
+        # Pre-check: skip if no plottable values (all series flat)
+        has_plottable = False
+        for kpi in kpi_names:
+            kpi_df = peer_df[peer_df["kpi_name"] == kpi].copy()
+            components_all = sorted(kpi_df["cmdb_id"].unique())
+            ranges = {}
+            for comp in components_all:
+                vals = kpi_df[kpi_df["cmdb_id"] == comp]["value"]
+                comp_range = float(vals.max() - vals.min()) if not vals.empty else 0.0
+                ranges[comp] = comp_range
+            global_range = max(ranges.values()) if ranges else 0.0
+            var_threshold = max(global_range * 0.05, 1e-3)
+            components_var = [
+                c for c in components_all if ranges.get(c, 0.0) >= var_threshold
+            ]
+            if components_var:
+                has_plottable = True
+                break
+        if not has_plottable:
+            return (
+                f"No variable KPI data to plot for {component_type}/{', '.join(kpi_names)}. "
+                "All series are flat over the window."
+            )
+
         n = len(kpi_names)
         fig, axes = plt.subplots(n, 1, figsize=(14, 5 * n), squeeze=False)
 
@@ -834,7 +927,9 @@ class StaticRCAActions(StaticTaskActions):
             ax.legend(loc="upper right", fontsize=7, ncol=2)
 
         plt.tight_layout()
-        fname = f"{component_type}_{'_'.join(kpi_names)}.png"
+        safe_component_type = _safe_filename_fragment(component_type)
+        safe_kpis = [_safe_filename_fragment(kpi) for kpi in kpi_names]
+        fname = f"{safe_component_type}_{'_'.join(safe_kpis)}.png"
         file_path = _os.path.join(out_dir, fname)
         fig.savefig(file_path, dpi=150, bbox_inches="tight")
         plt.close(fig)
@@ -903,31 +998,174 @@ class StaticRCAActions(StaticTaskActions):
         return df[df["datetime"] >= start_dt].copy()
 
     def _build_trace_edge_metric_frame(self, df: _pd.DataFrame) -> _pd.DataFrame:
-        """Aggregate trace rows into per-minute caller->callee edge metrics."""
+        """Aggregate trace rows into per-minute caller->callee edge metrics.
+
+        Uses both id/pid (RPC, docker-docker) and cmdb_id-dsName (JDBC, docker-db) for Telecom.
+        For Bank/Market (normalized edge schema), uses only cmdb_id-dsName to avoid duplicates.
+        """
         if df.empty:
             return df
 
-        edge_df = df.copy()
-        edge_df["caller"] = edge_df["cmdb_id"].fillna("").astype(str).str.strip()
-        edge_df["callee"] = edge_df["dsName"].fillna("").astype(str).str.strip()
-        edge_df = edge_df[
-            (edge_df["caller"] != "")
-            & (edge_df["callee"] != "")
-        ]
-        if edge_df.empty:
-            return edge_df
+        edge_rows: list[_pd.DataFrame] = []
+        is_telecom = 'id' in df.columns and 'pid' in df.columns
 
-        metrics = (
-            edge_df
-            .groupby(["caller", "callee", "bucket"], as_index=False)
+        if is_telecom:
+            id_pid_edges = _extract_edge_rows_id_pid(df)
+            if not id_pid_edges.empty:
+                edge_rows.append(id_pid_edges)
+            dsname_edges = _extract_edge_rows_dsname(df)
+            if not dsname_edges.empty:
+                edge_rows.append(dsname_edges)
+        else:
+            dsname_edges = _extract_edge_rows_dsname(df)
+            if not dsname_edges.empty:
+                edge_rows.append(dsname_edges)
+
+        if not edge_rows:
+            edge_df = df.copy()
+            edge_df['caller'] = edge_df['cmdb_id'].fillna('').astype(str).str.strip()
+            edge_df['callee'] = edge_df['dsName'].fillna('').astype(str).str.strip()
+            edge_df = edge_df[(edge_df['caller'] != '') & (edge_df['callee'] != '')]
+            if edge_df.empty:
+                return _pd.DataFrame()
+            edge_rows = [edge_df]
+
+        combined = _pd.concat(edge_rows, ignore_index=True)
+        if 'elapsedTime' not in combined.columns:
+            combined['elapsedTime'] = 0.0
+        if 'success_bool' not in combined.columns:
+            combined['success_bool'] = True
+
+        return (
+            combined
+            .groupby(['caller', 'callee', 'bucket'], as_index=False)
             .agg(
-                latency_p50=("elapsedTime", "median"),
-                error_rate=("success_bool", lambda s: (1 - s.mean()) * 100),
-                volume=("success_bool", "size"),
+                latency_p50=('elapsedTime', 'median'),
+                error_rate=('success_bool', lambda s: (1 - s.mean()) * 100),
+                volume=('success_bool', 'size'),
             )
-            .sort_values(["caller", "callee", "bucket"])
+            .sort_values(['caller', 'callee', 'bucket'])
         )
-        return metrics
+
+    def _build_trace_edge_gap_frame(self, df: _pd.DataFrame) -> _pd.DataFrame:
+        """Build per-minute edge caller gap (p50) from parent-child elapsed differences.
+
+        Only use RPC-style boundary spans to reduce noisy gap inflation:
+        - child callType == REMOTEPROCESS
+        - parent callType == CSF
+        """
+        if df.empty:
+            return _pd.DataFrame()
+
+        id_col = 'id' if 'id' in df.columns else ('span_id' if 'span_id' in df.columns else None)
+        pid_col = (
+            'pid'
+            if 'pid' in df.columns
+            else ('parent_id' if 'parent_id' in df.columns else ('parent_span' if 'parent_span' in df.columns else None))
+        )
+        dur_col = 'elapsedTime' if 'elapsedTime' in df.columns else ('duration' if 'duration' in df.columns else None)
+        if id_col is None or pid_col is None or dur_col is None:
+            return _pd.DataFrame()
+        if 'cmdb_id' not in df.columns or 'bucket' not in df.columns:
+            return _pd.DataFrame()
+
+        work = df.copy()
+        work['_id'] = work[id_col].astype(str)
+        work['_pid'] = work[pid_col].fillna('').astype(str)
+        if 'callType' not in work.columns:
+            return _pd.DataFrame()
+        work['_call_type'] = work['callType'].astype(str).str.strip().str.upper()
+        children = work[work['_pid'].str.strip() != ''].copy()
+        if children.empty:
+            return _pd.DataFrame()
+
+        parent_cmdb_map = work.set_index('_id')['cmdb_id'].to_dict()
+        parent_calltype_map = work.set_index('_id')['_call_type'].to_dict()
+        parent_elapsed_map = _pd.to_numeric(work.set_index('_id')[dur_col], errors='coerce').to_dict()
+        children['caller'] = children['_pid'].map(parent_cmdb_map)
+        children['callee'] = children['cmdb_id'].astype(str).str.strip()
+        children['parent_call_type'] = children['_pid'].map(parent_calltype_map)
+        # Keep only CSF -> RemoteProcess edges for gap signal.
+        children = children[
+            (children['_call_type'] == 'REMOTEPROCESS')
+            & (children['parent_call_type'] == 'CSF')
+        ].copy()
+        if children.empty:
+            return _pd.DataFrame()
+        children['parent_elapsed'] = _pd.to_numeric(children['_pid'].map(parent_elapsed_map), errors='coerce')
+        children['child_elapsed'] = _pd.to_numeric(children[dur_col], errors='coerce')
+        children['gap_ms'] = (children['parent_elapsed'] - children['child_elapsed']).clip(lower=0.0)
+
+        edges = children[
+            children['caller'].notna()
+            & children['callee'].notna()
+            & (children['caller'] != '')
+            & (children['callee'] != '')
+            & (children['caller'] != children['callee'])
+            & children['gap_ms'].notna()
+        ].copy()
+        if edges.empty:
+            return _pd.DataFrame()
+
+        return (
+            edges
+            .groupby(['caller', 'callee', 'bucket'], as_index=False)
+            .agg(
+                gap_p50=('gap_ms', 'median'),
+                gap_volume=('gap_ms', 'size'),
+            )
+            .sort_values(['caller', 'callee', 'bucket'])
+        )
+
+    def _build_trace_edge_remote_frame(self, df: _pd.DataFrame) -> _pd.DataFrame:
+        """Build per-minute edge RemoteProcess elapsed p50."""
+        if df.empty or 'callType' not in df.columns:
+            return _pd.DataFrame()
+
+        id_col = 'id' if 'id' in df.columns else ('span_id' if 'span_id' in df.columns else None)
+        pid_col = (
+            'pid'
+            if 'pid' in df.columns
+            else ('parent_id' if 'parent_id' in df.columns else ('parent_span' if 'parent_span' in df.columns else None))
+        )
+        dur_col = 'elapsedTime' if 'elapsedTime' in df.columns else ('duration' if 'duration' in df.columns else None)
+        if id_col is None or pid_col is None or dur_col is None:
+            return _pd.DataFrame()
+        if 'cmdb_id' not in df.columns or 'bucket' not in df.columns:
+            return _pd.DataFrame()
+
+        work = df.copy()
+        work['_id'] = work[id_col].astype(str)
+        work['_pid'] = work[pid_col].fillna('').astype(str)
+        work['_call_type'] = work['callType'].astype(str).str.strip().str.upper()
+        rp = work[(work['_call_type'] == 'REMOTEPROCESS') & (work['_pid'].str.strip() != '')].copy()
+        if rp.empty:
+            return _pd.DataFrame()
+
+        parent_cmdb_map = work.set_index('_id')['cmdb_id'].to_dict()
+        rp['caller'] = rp['_pid'].map(parent_cmdb_map)
+        rp['callee'] = rp['cmdb_id'].astype(str).str.strip()
+        rp['remote_elapsed'] = _pd.to_numeric(rp[dur_col], errors='coerce')
+        rp = rp[
+            rp['caller'].notna()
+            & rp['callee'].notna()
+            & (rp['caller'] != '')
+            & (rp['callee'] != '')
+            & (rp['caller'] != rp['callee'])
+            & rp['remote_elapsed'].notna()
+        ].copy()
+        if rp.empty:
+            return _pd.DataFrame()
+
+        return (
+            rp
+            .groupby(['caller', 'callee', 'bucket'], as_index=False)
+            .agg(
+                remote_p50=('remote_elapsed', 'median'),
+                remote_volume=('remote_elapsed', 'size'),
+            )
+            .sort_values(['caller', 'callee', 'bucket'])
+        )
 
     def _detect_trace_metric_onset(
         self,
@@ -939,7 +1177,7 @@ class StaticRCAActions(StaticTaskActions):
         sustain_buckets: int = 2,
         min_edge_volume: int = 20,
     ) -> dict | None:
-        """Detect earliest sustained shift in one edge metric series."""
+        """Detect sustained anomaly episodes and return the strongest one."""
         if edge_metric_df.empty:
             return None
 
@@ -952,87 +1190,148 @@ class StaticRCAActions(StaticTaskActions):
         volumes = series_df["volume"].fillna(0).astype(float)
         buckets = series_df["bucket"]
 
-        for idx in range(baseline_buckets, n_rows - sustain_buckets + 1):
+        episodes: list[dict] = []
+        idx = baseline_buckets
+        while idx <= n_rows - sustain_buckets:
             history = values.iloc[idx - baseline_buckets:idx]
             if history.empty or history.isna().any():
+                idx += 1
                 continue
 
             future_vals = values.iloc[idx:idx + sustain_buckets]
-            future_vols = volumes.iloc[idx:idx + sustain_buckets]
             if len(future_vals) < sustain_buckets:
-                continue
+                break
 
             baseline = float(history.median())
-            peak = float(future_vals.max())
-            trough = float(future_vals.min())
+            threshold = 0.0
+
+            def _is_anom(i: int) -> bool:
+                v = float(values.iloc[i])
+                vol = float(volumes.iloc[i])
+                if metric_kind in {"latency", "error_rate"} and vol < min_edge_volume:
+                    return False
+                return v >= threshold
+
             if metric_kind == "latency":
-                if (future_vols < min_edge_volume).any():
-                    continue
-                threshold = max(baseline * 1.8, baseline + 40.0)
+                threshold = max(baseline * 1.5, baseline + 100.0)
                 if baseline <= 1.0:
                     threshold = max(threshold, 40.0)
-                if all(float(v) >= threshold for v in future_vals):
-                    return {
+                if all(_is_anom(i) for i in range(idx, idx + sustain_buckets)):
+                    end_idx = idx + sustain_buckets - 1
+                    k = idx + sustain_buckets
+                    while k < n_rows and _is_anom(k):
+                        end_idx = k
+                        k += 1
+                    episodes.append({
                         "metric": metric_kind,
                         "onset": buckets.iloc[idx],
+                        "end": buckets.iloc[end_idx],
                         "baseline": baseline,
-                        "peak": peak,
+                        "peak": float(values.iloc[idx:end_idx + 1].max()),
                         "threshold": threshold,
-                    }
-            elif metric_kind == "error_rate":
-                if (future_vols < min_edge_volume).any():
+                        "duration_buckets": int(end_idx - idx + 1),
+                        "duration_minutes": float(end_idx - idx + 1),
+                    })
+                    idx = end_idx + 1
                     continue
+            elif metric_kind == "error_rate":
                 threshold = max(baseline * 3.0, baseline + 10.0, 5.0)
-                if all(float(v) >= threshold for v in future_vals):
-                    return {
+                if all(_is_anom(i) for i in range(idx, idx + sustain_buckets)):
+                    end_idx = idx + sustain_buckets - 1
+                    k = idx + sustain_buckets
+                    while k < n_rows and _is_anom(k):
+                        end_idx = k
+                        k += 1
+                    episodes.append({
                         "metric": metric_kind,
                         "onset": buckets.iloc[idx],
+                        "end": buckets.iloc[end_idx],
                         "baseline": baseline,
-                        "peak": peak,
+                        "peak": float(values.iloc[idx:end_idx + 1].max()),
                         "threshold": threshold,
-                    }
+                        "duration_buckets": int(end_idx - idx + 1),
+                        "duration_minutes": float(end_idx - idx + 1),
+                    })
+                    idx = end_idx + 1
+                    continue
             elif metric_kind == "volume_drop":
                 if baseline < min_edge_volume:
+                    idx += 1
                     continue
                 threshold = min(baseline * 0.5, baseline - 10.0)
                 threshold = max(threshold, 0.0)
                 if all(float(v) <= threshold for v in future_vals):
-                    return {
+                    end_idx = idx + sustain_buckets - 1
+                    k = idx + sustain_buckets
+                    while k < n_rows and float(values.iloc[k]) <= threshold:
+                        end_idx = k
+                        k += 1
+                    episodes.append({
                         "metric": metric_kind,
                         "onset": buckets.iloc[idx],
+                        "end": buckets.iloc[end_idx],
                         "baseline": baseline,
-                        "trough": trough,
+                        "trough": float(values.iloc[idx:end_idx + 1].min()),
                         "threshold": threshold,
-                        "drop_pct": max(0.0, (baseline - trough) / max(baseline, 1.0) * 100.0),
-                    }
-
-        return None
+                        "drop_pct": max(0.0, (baseline - float(values.iloc[idx:end_idx + 1].min())) / max(baseline, 1.0) * 100.0),
+                        "duration_buckets": int(end_idx - idx + 1),
+                        "duration_minutes": float(end_idx - idx + 1),
+                    })
+                    idx = end_idx + 1
+                    continue
+            idx += 1
+        if not episodes:
+            return None
+        strongest_raw = max(
+            episodes,
+            key=lambda e: (
+                float(e.get("peak", 0.0) if e.get("peak", None) is not None else e.get("drop_pct", 0.0)),
+                float(e.get("duration_minutes", 0.0)),
+            ),
+        )
+        # NOTE:
+        # strongest_raw is one element of episodes. If we attach episodes directly
+        # onto that same dict, it creates a self-reference (circular JSON object)
+        # when strongest_raw is inside episodes. Return detached copies instead.
+        strongest = dict(strongest_raw)
+        strongest["episodes"] = [dict(ep) for ep in episodes]
+        strongest["episode_count"] = len(episodes)
+        return strongest
 
     def _detect_trace_edge_anomalies(
         self,
         edge_metric_df: _pd.DataFrame,
         *,
+        gap_metric_df: _pd.DataFrame | None = None,
+        remote_metric_df: _pd.DataFrame | None = None,
         baseline_buckets: int = 5,
         sustain_buckets: int = 2,
         min_edge_volume: int = 20,
     ) -> list[dict]:
-        """Detect earliest anomalous caller->callee edges from latency, error, or volume shifts."""
+        """Detect anomalous caller->callee edges from error, gap, and remote metrics."""
         if edge_metric_df.empty:
             return []
 
+        merged_df = edge_metric_df.copy()
+        if gap_metric_df is not None and not gap_metric_df.empty:
+            merged_df = merged_df.merge(
+                gap_metric_df[["caller", "callee", "bucket", "gap_p50"]],
+                on=["caller", "callee", "bucket"],
+                how="left",
+            )
+        if remote_metric_df is not None and not remote_metric_df.empty:
+            merged_df = merged_df.merge(
+                remote_metric_df[["caller", "callee", "bucket", "remote_p50"]],
+                on=["caller", "callee", "bucket"],
+                how="left",
+            )
+
         anomalies: list[dict] = []
-        grouped = edge_metric_df.groupby(["caller", "callee"], sort=True)
+        grouped = merged_df.groupby(["caller", "callee"], sort=True)
         for (caller, callee), group in grouped:
             if not caller or not callee:
                 continue
-            latency_info = self._detect_trace_metric_onset(
-                group,
-                "latency_p50",
-                "latency",
-                baseline_buckets=baseline_buckets,
-                sustain_buckets=sustain_buckets,
-                min_edge_volume=min_edge_volume,
-            )
+            latency_info = None
             error_info = self._detect_trace_metric_onset(
                 group,
                 "error_rate",
@@ -1041,32 +1340,48 @@ class StaticRCAActions(StaticTaskActions):
                 sustain_buckets=sustain_buckets,
                 min_edge_volume=min_edge_volume,
             )
-            volume_info = self._detect_trace_metric_onset(
-                group,
-                "volume",
-                "volume_drop",
-                baseline_buckets=baseline_buckets,
-                sustain_buckets=sustain_buckets,
-                min_edge_volume=min_edge_volume,
-            )
-            if not latency_info and not error_info and not volume_info:
+            gap_info = None
+            if "gap_p50" in group.columns and group["gap_p50"].notna().any():
+                gap_info = self._detect_trace_metric_onset(
+                    group,
+                    "gap_p50",
+                    "latency",
+                    baseline_buckets=baseline_buckets,
+                    sustain_buckets=sustain_buckets,
+                    min_edge_volume=min_edge_volume,
+                )
+            remote_info = None
+            if "remote_p50" in group.columns and group["remote_p50"].notna().any():
+                remote_info = self._detect_trace_metric_onset(
+                    group,
+                    "remote_p50",
+                    "latency",
+                    baseline_buckets=baseline_buckets,
+                    sustain_buckets=sustain_buckets,
+                    min_edge_volume=min_edge_volume,
+                )
+            if not error_info and not gap_info and not remote_info:
                 continue
 
             metric_infos = {
-                "latency": latency_info,
                 "error_rate": error_info,
-                "volume_drop": volume_info,
+                "gap": gap_info,
+                "remote": remote_info,
             }
             onset_candidates = [
                 info["onset"] for info in metric_infos.values() if info is not None
             ]
             first_onset = min(onset_candidates)
             earliest_metrics = [
-                name for name, info in metric_infos.items()
+                name for name, info in {"error_rate": error_info, "gap": gap_info}.items()
                 if info is not None
                 and abs((info["onset"] - first_onset).total_seconds()) / 60.0 <= 1.5
             ]
-            dominant_metric = earliest_metrics[0] if len(earliest_metrics) == 1 else "mixed"
+            dominant_metric = "mixed"
+            if "gap" in earliest_metrics:
+                dominant_metric = "gap_edge"
+            elif "error_rate" in earliest_metrics:
+                dominant_metric = "error_edge"
 
             latency_score = 0.0
             if latency_info:
@@ -1080,11 +1395,17 @@ class StaticRCAActions(StaticTaskActions):
                     max(error_info["peak"] - error_info["baseline"], 0.0)
                     / max(error_info["baseline"], 1.0)
                 )
-            volume_score = 0.0
-            if volume_info:
-                volume_score = (
-                    max(volume_info["baseline"] - volume_info["trough"], 0.0)
-                    / max(volume_info["baseline"], 1.0)
+            gap_score = 0.0
+            if gap_info:
+                gap_score = (
+                    max(gap_info["peak"] - gap_info["baseline"], 0.0)
+                    / max(gap_info["baseline"], 1.0)
+                )
+            remote_score = 0.0
+            if remote_info:
+                remote_score = (
+                    max(remote_info["peak"] - remote_info["baseline"], 0.0)
+                    / max(remote_info["baseline"], 1.0)
                 )
 
             anomalies.append(
@@ -1096,9 +1417,10 @@ class StaticRCAActions(StaticTaskActions):
                     "dominant_metric": dominant_metric,
                     "latency_info": latency_info,
                     "error_info": error_info,
-                    "volume_info": volume_info,
+                    "gap_info": gap_info,
+                    "remote_info": remote_info,
                     "series": group.sort_values("bucket").reset_index(drop=True),
-                    "score": latency_score + error_score + volume_score,
+                    "score": latency_score + error_score + gap_score + remote_score,
                 }
             )
 
@@ -1115,61 +1437,47 @@ class StaticRCAActions(StaticTaskActions):
         onset_slack_minutes: int = 3,
         path_slack_minutes: int = 5,
     ) -> list[dict]:
-        """Grow a connected anomalous subgraph around the earliest anomalous edges."""
+        """Return all anomalous edges without onset/top-k filtering."""
         if not anomalies:
             return []
-
-        earliest = anomalies[0]["first_onset"]
-        seed_cutoff = earliest + _pd.Timedelta(minutes=onset_slack_minutes)
-        seeds = [item for item in anomalies if item["first_onset"] <= seed_cutoff]
-        seeds = seeds[:max(1, top_k_paths)]
-
-        outgoing: dict[str, list[dict]] = {}
-        incoming: dict[str, list[dict]] = {}
-        by_id = {item["edge_id"]: item for item in anomalies}
-        for item in anomalies:
-            outgoing.setdefault(item["caller"], []).append(item)
-            incoming.setdefault(item["callee"], []).append(item)
-
-        selected: dict[str, dict] = {item["edge_id"]: item for item in seeds}
-        queue = list(seeds)
-        while queue:
-            current = queue.pop(0)
-            current_time = current["first_onset"]
-            neighbors = outgoing.get(current["callee"], []) + incoming.get(current["caller"], [])
-            for candidate in neighbors:
-                if candidate["edge_id"] in selected:
-                    continue
-                delta_min = abs(
-                    (candidate["first_onset"] - current_time).total_seconds()
-                ) / 60.0
-                if delta_min > path_slack_minutes:
-                    continue
-                selected[candidate["edge_id"]] = candidate
-                queue.append(candidate)
-
-        selected_edges = list(selected.values())
-        selected_edges.sort(
-            key=lambda item: (item["first_onset"], -item["score"], item["edge_id"])
+        return sorted(
+            anomalies,
+            key=lambda item: (item["first_onset"], -item["score"], item["edge_id"]),
         )
-        return selected_edges[: max(top_k_paths * 3, 8)]
 
-    def _compute_trace_path_layout(self, selected_edges: list[dict]) -> dict[str, tuple[float, float]]:
-        """Layout nodes left-to-right by causal depth for the anomalous path subgraph."""
+    def _compute_trace_path_layout(
+        self,
+        selected_edges: list[dict],
+        extra_edges: list[tuple[str, str]] | None = None,
+    ) -> dict[str, tuple[float, float]]:
+        """Layout nodes left-to-right by causal depth. Uses both anomalous and normal edges."""
         nodes = sorted(
             {item["caller"] for item in selected_edges} | {item["callee"] for item in selected_edges}
         )
-        if not nodes:
-            return {}
-
-        indegree = {node: 0 for node in nodes}
         outgoing_nodes: dict[str, list[str]] = {node: [] for node in nodes}
         for item in selected_edges:
             caller = item["caller"]
             callee = item["callee"]
             if callee not in outgoing_nodes[caller]:
                 outgoing_nodes[caller].append(callee)
-                indegree[callee] += 1
+        if extra_edges:
+            for caller, callee in extra_edges:
+                if caller not in outgoing_nodes:
+                    outgoing_nodes[caller] = []
+                    nodes = sorted(set(nodes) | {caller, callee})
+                if callee not in outgoing_nodes:
+                    outgoing_nodes[callee] = []
+                    nodes = sorted(set(nodes) | {caller, callee})
+                if callee not in outgoing_nodes[caller]:
+                    outgoing_nodes[caller].append(callee)
+        if not nodes:
+            return {}
+
+        indegree = {node: 0 for node in nodes}
+        for caller, callees in outgoing_nodes.items():
+            for callee in callees:
+                if callee in indegree:
+                    indegree[callee] += 1
 
         depth = {node: 0 for node in nodes}
         queue = [node for node in nodes if indegree[node] == 0]
@@ -1201,12 +1509,11 @@ class StaticRCAActions(StaticTaskActions):
         return positions
 
     def _edge_plot_color(self, dominant_metric: str) -> str:
-        """Color-code anomalous edges by which signal rose first."""
+        """Color-code anomalous edges by anomaly type."""
         return {
-            "latency": "#1f77b4",
-            "error_rate": "#d62728",
-            "volume_drop": "#ff7f0e",
-            "mixed": "#9467bd",
+            "error_edge": "#d62728",
+            "latency_edge": "#ff7f0e",
+            "gap_edge": "#8c564b",
         }.get(dominant_metric, "#7f7f7f")
 
     def _edge_summary_label(self, item: dict) -> str:
@@ -1218,12 +1525,50 @@ class StaticRCAActions(StaticTaskActions):
         onset = item["first_onset"].strftime("%H:%M")
         parts = [onset]
         if item.get("latency_info"):
-            parts.append(f"L {item['latency_info']['peak']:.0f}ms")
+            d = int(float(item["latency_info"].get("duration_minutes", 0.0)))
+            c = int(item["latency_info"].get("episode_count", 1))
+            parts.append(f"L {item['latency_info']['peak']:.0f}ms D{d}m x{c}")
         if item.get("error_info"):
-            parts.append(f"E {item['error_info']['peak']:.0f}%")
-        if item.get("volume_info"):
-            parts.append(f"V -{item['volume_info']['drop_pct']:.0f}%")
+            d = int(float(item["error_info"].get("duration_minutes", 0.0)))
+            c = int(item["error_info"].get("episode_count", 1))
+            parts.append(f"E {item['error_info']['peak']:.0f}% D{d}m x{c}")
+        if item.get("gap_info"):
+            d = int(float(item["gap_info"].get("duration_minutes", 0.0)))
+            c = int(item["gap_info"].get("episode_count", 1))
+            parts.append(f"G {item['gap_info']['peak']:.0f}ms D{d}m x{c}")
         return "\n".join(parts)
+
+    def _remote_node_peak_map(self, selected_edges: list[dict]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for item in selected_edges:
+            info = item.get("remote_info")
+            callee = item.get("callee")
+            if not info or not callee:
+                continue
+            try:
+                peak = float(info.get("peak", 0.0))
+            except Exception:
+                peak = 0.0
+            prev = out.get(callee)
+            if prev is None or peak > prev:
+                out[callee] = peak
+        return out
+
+    def _remote_node_duration_map(self, selected_edges: list[dict]) -> dict[str, int]:
+        out: dict[str, int] = {}
+        for item in selected_edges:
+            info = item.get("remote_info")
+            callee = item.get("callee")
+            if not info or not callee:
+                continue
+            try:
+                dur = int(float(info.get("duration_minutes", 0.0)))
+            except Exception:
+                dur = 0
+            prev = out.get(callee, 0)
+            if dur > prev:
+                out[callee] = dur
+        return out
 
     def _plot_trace_anomalous_path_figure(
         self,
@@ -1231,26 +1576,52 @@ class StaticRCAActions(StaticTaskActions):
         out_path: str,
         *,
         window_minutes: int,
+        edge_metric_df: _pd.DataFrame | None = None,
     ) -> str:
-        """Render path graph plus edge-level latency/error/volume timelines."""
+        """Render path graph only (no latency/error/volume charts). Includes normal edges in gray."""
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
-        import matplotlib.dates as mdates
         from matplotlib.lines import Line2D
 
-        fig = plt.figure(figsize=(16, 15))
-        grid = fig.add_gridspec(3, 2, height_ratios=[1.05, 1.0, 0.95])
-        ax_graph = fig.add_subplot(grid[0, :])
-        ax_lat = fig.add_subplot(grid[1, 0])
-        ax_err = fig.add_subplot(grid[1, 1], sharex=ax_lat)
-        ax_vol = fig.add_subplot(grid[2, :], sharex=ax_lat)
+        anomalous_edge_ids = {item["edge_id"] for item in selected_edges}
+        nodes = {item["caller"] for item in selected_edges} | {item["callee"] for item in selected_edges}
+        normal_edges: list[tuple[str, str]] = []
+        if edge_metric_df is not None and not edge_metric_df.empty:
+            for (caller, callee), _ in edge_metric_df.groupby(["caller", "callee"], sort=True):
+                eid = f"{caller}->{callee}"
+                if eid not in anomalous_edge_ids and (caller in nodes or callee in nodes):
+                    nodes.add(caller)
+                    nodes.add(callee)
+                    normal_edges.append((caller, callee))
 
-        positions = self._compute_trace_path_layout(selected_edges)
+        fig = plt.figure(figsize=(14, 8))
+        ax_graph = fig.add_subplot(111)
+
+        positions = self._compute_trace_path_layout(selected_edges, extra_edges=normal_edges)
         ax_graph.set_axis_off()
 
         all_x = [pos[0] for pos in positions.values()] or [0.0]
         all_y = [pos[1] for pos in positions.values()] or [0.0]
+        gray = "#9E9E9E"
+        for idx, (caller, callee) in enumerate(normal_edges):
+            if caller in positions and callee in positions:
+                sx, sy = positions[caller]
+                tx, ty = positions[callee]
+                rad = 0.06 if idx % 2 == 0 else -0.06
+                ax_graph.annotate(
+                    "",
+                    xy=(tx - 0.35, ty),
+                    xytext=(sx + 0.35, sy),
+                    arrowprops={
+                        "arrowstyle": "->",
+                        "lw": 1.2,
+                        "color": gray,
+                        "alpha": 0.6,
+                        "connectionstyle": f"arc3,rad={rad}",
+                    },
+                    zorder=0,
+                )
         for idx, item in enumerate(selected_edges):
             sx, sy = positions[item["caller"]]
             tx, ty = positions[item["callee"]]
@@ -1288,111 +1659,52 @@ class StaticRCAActions(StaticTaskActions):
                 zorder=3,
             )
 
+        remote_node_peak = self._remote_node_peak_map(selected_edges)
+        remote_node_dur = self._remote_node_duration_map(selected_edges)
         for node, (x, y) in positions.items():
+            is_remote_node = node in remote_node_peak
+            node_text = node
+            if is_remote_node:
+                d = remote_node_dur.get(node, 0)
+                node_text = f"{node}\nR {remote_node_peak[node]:.0f}ms D{d}m"
             ax_graph.text(
                 x,
                 y,
-                node,
+                node_text,
                 ha="center",
                 va="center",
                 fontsize=10,
                 bbox={
                     "boxstyle": "round,pad=0.35",
-                    "fc": "#F7F8FA",
+                    "fc": "#eef7d1" if is_remote_node else "#F7F8FA",
                     "ec": "#4F5B67",
                     "lw": 1.2,
                 },
                 zorder=4,
             )
 
-        graph_legend = [
-            Line2D([0], [0], color="#1f77b4", lw=2, label="latency rises first"),
-            Line2D([0], [0], color="#d62728", lw=2, label="error rises first"),
-            Line2D([0], [0], color="#ff7f0e", lw=2, label="volume drops first"),
-            Line2D([0], [0], color="#9467bd", lw=2, label="multiple signals rise together"),
-        ]
-        ax_graph.legend(handles=graph_legend, loc="upper right", frameon=False, fontsize=8)
+        dominant_metrics = {str(item.get("dominant_metric", "")) for item in selected_edges}
+        graph_legend = []
+        if "latency_edge" in dominant_metrics:
+            graph_legend.append(Line2D([0], [0], color="#ff7f0e", lw=2, label="latency edge"))
+        if "error_edge" in dominant_metrics:
+            graph_legend.append(Line2D([0], [0], color="#d62728", lw=2, label="error edge"))
+        if "gap_edge" in dominant_metrics:
+            graph_legend.append(Line2D([0], [0], color="#8c564b", lw=2, label="gap edge"))
+        if remote_node_peak:
+            graph_legend.append(Line2D([0], [0], marker="s", markersize=10, markerfacecolor="#eef7d1", color="none", label="remote node"))
+        if normal_edges:
+            graph_legend.append(Line2D([0], [0], color=gray, lw=1.5, label="normal"))
+        if graph_legend:
+            ax_graph.legend(handles=graph_legend, loc="upper right", frameon=False, fontsize=8)
         ax_graph.set_title(
-            f"Earliest anomalous caller-callee paths ({window_minutes}-minute trace window)",
+            f"Anomalous caller-callee paths (strongest episode per edge, {window_minutes}-minute window)",
             fontsize=13,
             fontweight="bold",
             pad=12,
         )
         ax_graph.set_xlim(min(all_x) - 1.3, max(all_x) + 1.3)
         ax_graph.set_ylim(min(all_y) - 1.4, max(all_y) + 1.4)
-
-        for item in selected_edges:
-            color = self._edge_plot_color(item["dominant_metric"])
-            label = self._edge_summary_label(item)
-            series = item["series"]
-            ax_lat.plot(
-                series["bucket"],
-                series["latency_p50"],
-                label=label,
-                color=color,
-                linewidth=1.8,
-                alpha=0.9,
-            )
-            ax_err.plot(
-                series["bucket"],
-                series["error_rate"],
-                label=label,
-                color=color,
-                linewidth=1.8,
-                alpha=0.9,
-            )
-            ax_vol.plot(
-                series["bucket"],
-                series["volume"],
-                label=label,
-                color=color,
-                linewidth=1.8,
-                alpha=0.9,
-            )
-            if item.get("latency_info"):
-                ax_lat.axvline(
-                    item["latency_info"]["onset"],
-                    color=color,
-                    linestyle=":",
-                    alpha=0.35,
-                    linewidth=1.0,
-                )
-            if item.get("error_info"):
-                ax_err.axvline(
-                    item["error_info"]["onset"],
-                    color=color,
-                    linestyle=":",
-                    alpha=0.35,
-                    linewidth=1.0,
-                )
-            if item.get("volume_info"):
-                ax_vol.axvline(
-                    item["volume_info"]["onset"],
-                    color=color,
-                    linestyle=":",
-                    alpha=0.35,
-                    linewidth=1.0,
-                )
-
-        ax_lat.set_title("Edge latency (p50) over time", fontsize=11, fontweight="bold")
-        ax_lat.set_ylabel("Latency (ms)")
-        ax_lat.grid(True, alpha=0.3)
-        ax_lat.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-        ax_lat.legend(loc="upper left", fontsize=7, ncol=2)
-
-        ax_err.set_title("Edge error rate over time", fontsize=11, fontweight="bold")
-        ax_err.set_ylabel("Error rate (%)")
-        ax_err.set_xlabel("Time (UTC)")
-        ax_err.grid(True, alpha=0.3)
-        ax_err.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-        ax_err.legend(loc="upper left", fontsize=7, ncol=2)
-
-        ax_vol.set_title("Edge span volume over time", fontsize=11, fontweight="bold")
-        ax_vol.set_ylabel("Span count")
-        ax_vol.set_xlabel("Time (UTC)")
-        ax_vol.grid(True, alpha=0.3)
-        ax_vol.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
-        ax_vol.legend(loc="upper left", fontsize=7, ncol=2)
 
         plt.tight_layout()
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
@@ -1410,71 +1722,35 @@ class StaticRCAActions(StaticTaskActions):
         onset_slack_minutes: int = 3,
         sustain_buckets: int = 2,
     ) -> str:
-        """Find earliest anomalous caller->callee paths and visualize multi-hop propagation.
+        """Find anomalous caller->callee paths and visualize the strongest episode per edge.
 
-        This action scans the trace window, detects the earliest sustained rise in
-        latency and/or error rate plus sharp volume drops on caller->callee edges, grows a connected
-        multi-hop anomalous subgraph, and renders:
-        1. a directed path graph of the earliest anomalous edges
-        2. per-edge latency timelines
-        3. per-edge error-rate timelines
-        4. per-edge span-volume timelines
+        This action scans the trace window and detects sustained anomalies on:
+        - error-rate edges (caller->callee)
+        - network-gap edges (caller->callee)
+        - remote-process-time nodes (callee service)
+        Then it renders one directed graph with anomalous edges plus normal context edges.
 
         Args:
             namespace: e.g. "static-telecom"
             window_minutes: inspect only the last N minutes of the trace window
-            top_k_paths: number of earliest seed edges to start path growth from
+            top_k_paths: retained for backward compatibility (currently not used for filtering)
             min_edge_volume: minimum spans/min required to trust an edge signal
-            onset_slack_minutes: edges within this many minutes of the earliest onset become seeds
+            onset_slack_minutes: retained for backward compatibility (currently not used for filtering)
             sustain_buckets: require anomaly to persist for this many 1-minute buckets
 
         Returns:
-            PNG path plus a short textual summary of the earliest anomalous paths.
+            PNG path plus a short textual summary of anomalous paths.
         """
-        df = self._load_trace_window_minutes(namespace, window_minutes=window_minutes)
-        if df.empty:
-            return f"No trace data found for namespace '{namespace}'"
-
-        edge_metric_df = self._build_trace_edge_metric_frame(df)
-        if edge_metric_df.empty:
-            return "No caller-callee trace edges found in the selected window"
-
-        anomalies = self._detect_trace_edge_anomalies(
-            edge_metric_df,
-            sustain_buckets=sustain_buckets,
-            min_edge_volume=min_edge_volume,
-        )
-        if not anomalies:
-            return (
-                "No anomalous caller-callee paths found. "
-                f"Checked last {window_minutes} minutes with min_edge_volume={min_edge_volume}."
-            )
-
-        selected_edges = self._select_trace_path_subgraph(
-            anomalies,
-            top_k_paths=top_k_paths,
-            onset_slack_minutes=onset_slack_minutes,
-            path_slack_minutes=max(onset_slack_minutes + 2, 5),
-        )
-        if not selected_edges:
-            return "Trace anomalies were detected, but no connected path subgraph could be formed."
-
-        out_dir = self.save_dir or _os.path.join(self.work_dir, "static_metric_output")
-        _os.makedirs(out_dir, exist_ok=True)
-        out_path = _os.path.join(out_dir, "trace_anomalous_paths.png")
-        self._plot_trace_anomalous_path_figure(
-            selected_edges,
-            out_path,
+        renderer = get_trace_path_renderer(self.problem_id)
+        return renderer.render(
+            self,
+            namespace,
             window_minutes=window_minutes,
+            top_k_paths=top_k_paths,
+            min_edge_volume=min_edge_volume,
+            onset_slack_minutes=onset_slack_minutes,
+            sustain_buckets=sustain_buckets,
         )
-
-        summary_lines = [out_path, "", "Earliest anomalous edges:"]
-        for item in selected_edges[: min(len(selected_edges), 8)]:
-            onset = item["first_onset"].strftime("%Y-%m-%d %H:%M:%S")
-            summary_lines.append(
-                f"- {item['caller']} -> {item['callee']} | onset={onset} | mode={item['dominant_metric']}"
-            )
-        return "\n".join(summary_lines)
 
     @visualization
     @trace_action

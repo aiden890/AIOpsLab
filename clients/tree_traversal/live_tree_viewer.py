@@ -81,6 +81,63 @@ def _parse_time_epoch(time_str: str | None) -> float | None:
     return None
 
 
+def _short_component_label(component: str | None, max_len: int = 16) -> str:
+    comp = str(component or "").strip()
+    if not comp:
+        return "?"
+    if "." in comp:
+        host, leaf = comp.split(".", 1)
+        host_short = host if len(host) <= 6 else host[:6]
+        return f"{host_short}.{_short_component_label(leaf, max_len=max_len)}"[:max_len]
+
+    service_aliases = {
+        "productcatalogservice": "catalog",
+        "recommendationservice": "reco",
+        "checkoutservice": "checkout",
+        "shippingservice": "ship",
+        "currencyservice": "currency",
+        "paymentservice": "payment",
+        "emailservice": "email",
+        "cartservice": "cart",
+        "frontend": "front",
+        "adservice": "ad",
+        "apache": "apache",
+        "tomcat": "tomcat",
+        "docker": "docker",
+        "mysql": "mysql",
+        "redis": "redis",
+    }
+    for full, short in sorted(service_aliases.items(), key=lambda x: -len(x[0])):
+        if comp.startswith(full):
+            comp = short + comp[len(full):]
+            break
+    return comp[:max_len]
+
+
+def _short_kpi_label(kpi: str | None, max_len: int = 18) -> str:
+    text = str(kpi or "").strip()
+    if not text:
+        return ""
+    replacements = {
+        "container_": "c_",
+        "system.": "sys.",
+        "network": "net",
+        "memory": "mem",
+        "receive": "rx",
+        "transmit": "tx",
+        "request_duration_milliseconds": "req_ms",
+        "success_rate": "sr",
+        "error_rate": "err",
+        "productcatalogservice": "catalog",
+        "recommendationservice": "reco",
+        "checkoutservice": "checkout",
+        "shippingservice": "ship",
+    }
+    for src, dst in replacements.items():
+        text = text.replace(src, dst)
+    return text[:max_len]
+
+
 class LiveTreeViewer:
     """파이프라인과 같은 프로세스에서 트리/타임라인을 실시간으로 그리는 뷰어."""
 
@@ -169,7 +226,7 @@ class LiveTreeViewer:
                 {
                     "minute": minute,
                     "component": n.component or "?",
-                    "label": (n.kpi or n.reason or n.evidence or "")[:40],
+                    "label": _short_kpi_label(n.kpi or n.reason or n.evidence or "", max_len=24),
                     "status": n.status,
                     "confidence": getattr(n, "confidence", None),
                     "evidence": getattr(n, "evidence", "") or "",
@@ -198,6 +255,7 @@ class LiveTreeViewer:
         for it in items:
             if it["component"] not in components:
                 components.append(it["component"])
+        component_labels = [_short_component_label(c, max_len=18) for c in components]
 
         if self._fig is None:
             height = max(4, len(components) * 0.9)
@@ -247,7 +305,7 @@ class LiveTreeViewer:
 
         self._ax.scatter(xs, ys, c=colors, s=80, alpha=0.8, zorder=2)
         self._ax.set_yticks(range(len(components)))
-        self._ax.set_yticklabels(components, fontsize=8)
+        self._ax.set_yticklabels(component_labels, fontsize=8)
 
         # 5) label: kpi or root cause reason (+ confidence or severity if present)
         for idx, (x, y, it) in enumerate(zip(xs, ys, items)):
@@ -616,7 +674,7 @@ class LiveTreeViewer:
             )
             self._ax.add_patch(circle)
 
-            label_parts = [node.component or "?"]
+            label_parts = [_short_component_label(node.component, max_len=18)]
             if stage == "localize":
                 kpi_val = getattr(node, "kpi", None)
                 kpi_list: list[str] = []
@@ -625,15 +683,15 @@ class LiveTreeViewer:
                 elif isinstance(kpi_val, (list, tuple)):
                     kpi_list = [str(k).strip() for k in kpi_val if str(k).strip()]
                 if kpi_list:
-                    label_parts.append("\n".join(kpi_list))
+                    label_parts.append(_short_kpi_label(kpi_list[0], max_len=18))
             elif stage in ("deep_dive", "expand"):
                 rc_class = getattr(node, "root_cause_reason_class", None) or ""
                 if (rc_class or "").strip():
-                    label_parts.append((rc_class or "").strip()[:16])
+                    label_parts.append((rc_class or "").strip()[:14])
                 elif (node.reason or "").strip():
-                    label_parts.append((node.reason or "").strip()[:16])
+                    label_parts.append((node.reason or "").strip()[:14])
             elif node.reason and stage not in ("localize", "deep_dive", "expand"):
-                label_parts.append((node.reason or "")[:16])
+                label_parts.append((node.reason or "")[:14])
 
             # Append time (HH:MM or full string) so we can see when this node's
             # anomaly/decision is anchored in time.
@@ -665,8 +723,8 @@ class LiveTreeViewer:
                     rel_tokens = [t.strip() for t in re.split(r"[;,]", relation) if t.strip()]
                     rel_lines = []
                     for tok in rel_tokens:
-                        rel_lines.append(tok[:28])
-                        if len(rel_lines) >= 2:
+                        rel_lines.append(tok[:18])
+                        if len(rel_lines) >= 1:
                             break
                     if rel_lines:
                         label_parts.extend(rel_lines)
@@ -713,7 +771,7 @@ class LiveTreeViewer:
                         self._ax.text(
                             min_x + width / 2.0,
                             max_y + 0.15,
-                            host_label,
+                            _short_component_label(host_label, max_len=20),
                             ha="center",
                             va="bottom",
                             fontsize=7,

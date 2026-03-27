@@ -11,6 +11,7 @@ Metric files:
   - metric_service.csv   → service: frontend-http, columns: sr, mrt, rr, count
   - metric_runtime.csv   → cmdb_id: adservice.ts:8088, KPIs: java_nio_*
   - metric_mesh.csv      → cmdb_id: cartservice-1.source.cartservice.redis-cart
+  - logs.csv             → timestamp, service/cmdb_id, log text fields for restart/error/event clues
 
 Trace:
   - trace_span.csv → timestamp, cmdb_id, span_id, trace_id, duration, type, status_code, operation_name, parent_span
@@ -90,6 +91,11 @@ Match the anomalous KPI to the reason:
   - container_fs_reads_MB spike → "container read I/O load"
   - container_fs_writes_MB spike → "container write I/O load"
 
+If the candidate suggests restart/termination, traffic cutoff, or network isolation, briefly inspect `logs.csv`
+with `execute()` or `telemetry.get_logs()` for corroborating clues such as restarts, connection errors,
+readiness/liveness failures, shutdown messages, or routing/policy-related errors. Logs are supporting evidence,
+not the primary localization signal.
+
 **Step 4 — Pinpoint the exact occurrence time**
 Find the exact timestamp when the anomaly first starts. Report the precise "YYYY-MM-DD HH:MM:SS" from the CSV timestamp column.
 
@@ -132,6 +138,9 @@ Remove false positives: transient spikes (<2 min), consistently high/low baselin
 
 **Step 3 — Identify the failure reason**
 Match the anomalous KPI to the specific failure reason from the possible root causes list.
+If needed, inspect `logs.csv` for supporting clues such as restarts, shutdowns, connection errors,
+readiness/liveness failures, or network-policy/routing-related messages, especially for suspected
+container process termination or traffic-isolation cases.
 
 **Step 4 — Pinpoint the exact occurrence time**
 Use `execute()` to find the exact timestamp. Report "YYYY-MM-DD HH:MM:SS".

@@ -132,10 +132,12 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
             import copy
             from aiopslab.orchestrator.static_actions.executor.prompts.executor_prompt import (
                 system_template as _sys_tmpl, rule as _rule, code_format as _code_fmt,
+                get_rule_for_namespace as _get_rule_for_namespace,
             )
             nb = copy.deepcopy(_NOTEBOOK_TEMPLATE)
+            active_rule = _get_rule_for_namespace(namespace) if namespace else _rule
             executor_system_prompt = _sys_tmpl.format(
-                rule=_rule, background=background, format=_code_fmt,
+                rule=active_rule, background=background, format=_code_fmt,
             )
             nb["cells"].append({
                 "cell_type": "markdown",
@@ -315,6 +317,7 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
             logger=self._logger,
             max_retries=3,
             summary_injector=self._summary_injector,
+            namespace=self._namespace,
         )
 
         if not success:

@@ -1,6 +1,6 @@
 """Executor prompt rules for Python code generation."""
 
-rule = """## RULES OF PYTHON CODE WRITING:
+_BASE_RULE = """## RULES OF PYTHON CODE WRITING:
 
 1. Reuse variables as much as possible for execution efficiency since the IPython Kernel is stateful, i.e., variables defined in previous steps can be used in subsequent steps.
 2. Use variable name rather than `print()` to display the execution results since your Python environment is IPython Kernel rather than Python.exe. If you want to display multiple variables, use commas to separate them, e.g. `var1, var2`.
@@ -12,6 +12,7 @@ rule = """## RULES OF PYTHON CODE WRITING:
 8. Do not generate anything else except the Python code block except the instruction tells you to 'Use plain English'. If you find the input instruction is a summarization task (which is typically happening in the last step), you should comprehensively summarize the conclusion as a string in your code and display it directly.
 9. Do not calculate threshold AFTER filtering data within the given time duration. Always calculate global thresholds using the entire KPI series of a specific component within a metric file BEFORE filtering data within the given time duration.
 10. All issues use **UTC** time. However, the local machine's default timezone is unknown.
+11. Keep dataset semantics consistent with the active namespace/dataset. Do not apply dataset-specific assumptions unless explicitly supported by the current dataset.
 
 ## DATA ACCESS:
 
@@ -31,6 +32,31 @@ Each call returns the **full file path** to a CSV. Read it directly:
     trace_df = pd.read_csv(trace_path)
 
 Note: Call telemetry.get_*() only once per data type, then reuse the cached DataFrame variable."""
+
+_MARKET_RULE_APPENDIX = """
+
+## MARKET DATASET NOTES:
+
+1. In Market traces (`trace_span.csv`), treat `status_code` values `0`, `OK`, `Ok`, `200`, and `SUCCESS` as success.
+2. When computing error rate, do NOT count status `0` as error.
+3. For Market pod analysis, metric_container `cmdb_id` can be in `node-X.<pod_name>` format. When filtering a target pod, match both exact pod name and suffix after dot (e.g., `cmdb_id == "cartservice2-0"` OR `cmdb_id.split(".",1)[-1] == "cartservice2-0"`).
+"""
+
+
+def get_rule_for_namespace(namespace: str | None = None) -> str:
+    """Return executor rule text with dataset-specific appendix by namespace.
+
+    Args:
+        namespace: AIOpsLab namespace like "static-market-cb1", "static-bank", "static-telecom".
+    """
+    ns = (namespace or "").lower()
+    if "market" in ns:
+        return _BASE_RULE + _MARKET_RULE_APPENDIX
+    return _BASE_RULE
+
+
+# Backward-compatible default used by call sites that do not pass namespace.
+rule = _BASE_RULE
 
 
 system_template = """You are a DevOps assistant for writing Python code to answer DevOps questions. For each question, you need to write Python code to solve it by retrieving and processing telemetry data of the target system. Your generated Python code will be automatically submitted to a IPython Kernel. The execution result output in IPython Kernel will be used as the answer to the question.

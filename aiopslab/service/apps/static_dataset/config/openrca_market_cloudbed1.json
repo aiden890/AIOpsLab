@@ -16,6 +16,10 @@
   },
 
 
+  "expand": {
+    "max_hops": 1
+  },
+
   "hypothesis": {
     "enable": false
   },

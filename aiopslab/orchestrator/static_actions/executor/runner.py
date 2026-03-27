@@ -14,6 +14,7 @@ import tiktoken
 from aiopslab.orchestrator.static_actions.executor.api_router import get_chat_completion
 from aiopslab.orchestrator.static_actions.executor.prompts.executor_prompt import (
     rule,
+    get_rule_for_namespace,
     system_template,
     code_format,
     summary_template,
@@ -22,7 +23,7 @@ from aiopslab.orchestrator.static_actions.executor.prompts.executor_prompt impor
 
 
 def execute_act(instruction, background, history, kernel, configs, logger,
-                max_retries=3, summary_injector=None):
+                max_retries=3, summary_injector=None, namespace: str | None = None):
     """Execute an instruction by generating and running Python code.
 
     Args:
@@ -40,10 +41,12 @@ def execute_act(instruction, background, history, kernel, configs, logger,
     logger.debug("Start execution")
     t1 = datetime.now()
 
+    active_rule = get_rule_for_namespace(namespace) if namespace else rule
+
     if not history:
         history = [
             {"role": "system", "content": system_template.format(
-                rule=rule, background=background, format=code_format
+                rule=active_rule, background=background, format=code_format
             )},
         ]
 
@@ -55,7 +58,7 @@ def execute_act(instruction, background, history, kernel, configs, logger,
     history.append({"role": "user", "content": instruction})
     prompt = history.copy()
     note = [{"role": "user", "content": (
-        f"Continue your code writing process following the rules:\n\n{rule}\n\n"
+        f"Continue your code writing process following the rules:\n\n{active_rule}\n\n"
         f"Response format:\n\n{code_format}"
     )}]
 

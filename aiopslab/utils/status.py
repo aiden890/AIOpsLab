@@ -44,6 +44,19 @@ class SessionPrint:
         self._logging_handler = None
         self._owner_thread = None
 
+    def _sanitize_text(self, text, preserve_ansi=False):
+        """Remove NUL and other unsafe control chars before terminal/file output."""
+        raw = str(text)
+        keep = []
+        for ch in raw:
+            if ch in ("\n", "\r", "\t"):
+                keep.append(ch)
+            elif preserve_ansi and ch == "\x1b":
+                keep.append(ch)
+            elif ord(ch) >= 32:
+                keep.append(ch)
+        return "".join(keep)
+
     def _thread_filter(self, record):
         """Only accept log records from the thread that owns this handler."""
         return threading.current_thread().ident == self._owner_thread
@@ -94,15 +107,21 @@ class SessionPrint:
 
     def _log(self, text, colored_text=None):
         """Write to terminal and/or file."""
+        selected = colored_text if colored_text else text
+
         # Write to terminal with colors
         if self.enable_terminal:
-            print(colored_text if colored_text else text)
+            print(self._sanitize_text(selected, preserve_ansi=True))
 
         # Write to file without colors (strip ANSI codes)
         if self.enable_file and self.log_file:
             # Remove ANSI color codes for file output
-            
-            clean_text = re.sub(r'\x1b\[[0-9;]*m', '', str(colored_text if colored_text else text))
+
+            clean_text = re.sub(
+                r'\x1b\[[0-9;]*m',
+                '',
+                self._sanitize_text(selected, preserve_ansi=True),
+            )
             self.log_file.write(clean_text + '\n')
             self.log_file.flush()
 

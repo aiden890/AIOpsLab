@@ -21,16 +21,16 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 _TELECOM_CALL_GRAPH = {
-    # "os_021": ["docker_003", "docker_004"],
-    # "os_022": ["docker_001", "docker_002"],
-    # "docker_001": ["docker_007", "docker_008", "db_007", "db_009"],
-    # "docker_002": ["docker_007", "docker_008", "db_007", "db_009"],
-    # "docker_003": ["docker_005", "docker_006", "db_007", "db_009"],
-    # "docker_004": ["docker_005", "docker_006", "db_007", "db_009"],
-    # "docker_005": ["db_003"],
-    # "docker_006": ["db_003"],
-    # "docker_007": ["db_003"],
-    # "docker_008": ["db_003"],
+    "os_021": ["docker_003", "docker_004"],
+    "os_022": ["docker_001", "docker_002"],
+    "docker_001": ["docker_007", "docker_008", "db_007", "db_009"],
+    "docker_002": ["docker_007", "docker_008", "db_007", "db_009"],
+    "docker_003": ["docker_005", "docker_006", "db_007", "db_009"],
+    "docker_004": ["docker_005", "docker_006", "db_007", "db_009"],
+    "docker_005": ["db_003"],
+    "docker_006": ["db_003"],
+    "docker_007": ["db_003"],
+    "docker_008": ["db_003"],
 }
 
 # Host -> components on that host (from deployment topology).
@@ -49,9 +49,9 @@ _TELECOM_DEPLOYMENT_GRAPH = {
 }
 
 _TELECOM_SHARED_RESOURCE_GRAPH = {
-    # "db_003": ["docker_005", "docker_006", "docker_007", "docker_008"],
-    # "db_007": ["docker_001", "docker_002", "docker_003", "docker_004"],
-    # "db_009": ["docker_001", "docker_002", "docker_003", "docker_004"],
+    "db_003": ["docker_005", "docker_006", "docker_007", "docker_008"],
+    "db_007": ["docker_001", "docker_002", "docker_003", "docker_004"],
+    "db_009": ["docker_001", "docker_002", "docker_003", "docker_004"],
 }
 
 # ---------------------------------------------------------------------------
@@ -59,6 +59,8 @@ _TELECOM_SHARED_RESOURCE_GRAPH = {
 # ---------------------------------------------------------------------------
 
 _BANK_CALL_GRAPH = {
+    "apache01": ["IG01", "IG02"],
+    "apache02": ["IG01", "IG02"],
     "IG01": ["Tomcat01", "Tomcat02", "Tomcat03", "Tomcat04"],
     "IG02": ["Tomcat01", "Tomcat02", "Tomcat03", "Tomcat04"],
     "Tomcat01": ["MG01", "MG02"],
@@ -67,10 +69,10 @@ _BANK_CALL_GRAPH = {
     "Tomcat04": ["MG01", "MG02"],
     "MG01": ["dockerA1", "dockerA2", "dockerB1", "dockerB2"],
     "MG02": ["dockerA1", "dockerA2", "dockerB1", "dockerB2"],
-    "dockerA1": ["MG01", "MG02"],
-    "dockerA2": ["MG01", "MG02"],
-    "dockerB1": ["MG01", "MG02"],
-    "dockerB2": ["MG01", "MG02"],
+    "dockerA1": ["MG01", "MG02", "Mysql01", "Mysql02", "Redis01", "Redis02"],
+    "dockerA2": ["MG01", "MG02", "Mysql01", "Mysql02", "Redis01", "Redis02"],
+    "dockerB1": ["MG01", "MG02", "Mysql01", "Mysql02", "Redis01", "Redis02"],
+    "dockerB2": ["MG01", "MG02", "Mysql01", "Mysql02", "Redis01", "Redis02"],
 }
 
 _BANK_DEPLOYMENT_GRAPH: dict[str, list[str]] = {}
@@ -78,6 +80,10 @@ _BANK_DEPLOYMENT_GRAPH: dict[str, list[str]] = {}
 _BANK_SHARED_RESOURCE_GRAPH = {
     "MG01": ["Tomcat01", "Tomcat02", "Tomcat03", "Tomcat04", "dockerA1", "dockerA2", "dockerB1", "dockerB2"],
     "MG02": ["Tomcat01", "Tomcat02", "Tomcat03", "Tomcat04", "dockerA1", "dockerA2", "dockerB1", "dockerB2"],
+    "Mysql01": ["dockerA1", "dockerA2", "dockerB1", "dockerB2"],
+    "Mysql02": ["dockerA1", "dockerA2", "dockerB1", "dockerB2"],
+    "Redis01": ["dockerA1", "dockerA2", "dockerB1", "dockerB2"],
+    "Redis02": ["dockerA1", "dockerA2", "dockerB1", "dockerB2"],
 }
 
 # ---------------------------------------------------------------------------
@@ -94,6 +100,26 @@ _MARKET_CALL_GRAPH = {
 }
 
 _MARKET_DEPLOYMENT_GRAPH = {
+    "frontend": ["frontend-0", "frontend-1", "frontend-2", "frontend2-0"],
+    "frontend2": ["frontend2-0"],
+    "adservice": ["adservice-0", "adservice-1", "adservice-2", "adservice2-0"],
+    "adservice2": ["adservice2-0"],
+    "cartservice": ["cartservice-0", "cartservice-1", "cartservice-2", "cartservice2-0"],
+    "cartservice2": ["cartservice2-0"],
+    "checkoutservice": ["checkoutservice-0", "checkoutservice-1", "checkoutservice-2", "checkoutservice2-0"],
+    "checkoutservice2": ["checkoutservice2-0"],
+    "currencyservice": ["currencyservice-0", "currencyservice-1", "currencyservice-2", "currencyservice2-0"],
+    "currencyservice2": ["currencyservice2-0"],
+    "emailservice": ["emailservice-0", "emailservice-1", "emailservice-2", "emailservice2-0"],
+    "emailservice2": ["emailservice2-0"],
+    "paymentservice": ["paymentservice-0", "paymentservice-1", "paymentservice-2", "paymentservice2-0"],
+    "paymentservice2": ["paymentservice2-0"],
+    "productcatalogservice": ["productcatalogservice-0", "productcatalogservice-1", "productcatalogservice-2", "productcatalogservice2-0"],
+    "productcatalogservice2": ["productcatalogservice2-0"],
+    "recommendationservice": ["recommendationservice-0", "recommendationservice-1", "recommendationservice-2", "recommendationservice2-0"],
+    "recommendationservice2": ["recommendationservice2-0"],
+    "shippingservice": ["shippingservice-0", "shippingservice-1", "shippingservice-2", "shippingservice2-0"],
+    "shippingservice2": ["shippingservice2-0"],
     "node-5": [
         "adservice-2", "cartservice2-0", "checkoutservice-2",
         "frontend-1", "frontend-2", "shippingservice-2",

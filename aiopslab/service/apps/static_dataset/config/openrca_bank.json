@@ -7,13 +7,19 @@
   "telemetry": {
     "enable_trace": true,
     "enable_log": true,
-    "enable_metric": true
+    "enable_metric": true,
+    "enable_visualization_tool": true
   },
 
   "executor": {
     "enable": true
   },
 
+
+  "expand": {
+    "max_hops": 1
+  },
+  
   "hypothesis": {
     "enable": false
   },
@@ -65,6 +71,24 @@
       "Mysql01", "Mysql02",
       "Redis01", "Redis02"
     ],
+    "component_levels": {
+      "node": [
+        "apache01", "apache02",
+        "Tomcat01", "Tomcat02", "Tomcat03", "Tomcat04",
+        "MG01", "MG02",
+        "IG01", "IG02",
+        "Mysql01", "Mysql02",
+        "Redis01", "Redis02"
+      ],
+      "pod": [
+        "dockerA1", "dockerA2",
+        "dockerB1", "dockerB2"
+      ],
+      "jvm": [
+        "MG01", "MG02",
+        "IG01", "IG02"
+      ]
+    },
     "reasons": [
       "high CPU usage",
       "high memory usage",

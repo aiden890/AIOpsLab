@@ -7,14 +7,20 @@ Usage:
     python clients/tree_traversal/run_market_cb1.py
     python clients/tree_traversal/run_market_cb1.py --all
     python clients/tree_traversal/run_market_cb1.py --problem openrca_market_cb1-task_5-8
+    python clients/tree_traversal/run_market_cb1.py --problem openrca_market_cb1-task_6-0
+    python clients/tree_traversal/run_market_cb1.py --problem openrca_market_cb1-task_6-0 --no-controller-expand
     python clients/tree_traversal/run_market_cb1.py --no-video
     python clients/tree_traversal/run_market_cb1.py --parallel 2
+    python clients/tree_traversal/run_market_cb1.py --use-prefiltered prefiltered_telemetry
+    python clients/tree_traversal/run_market_cb1.py --problem openrca_market_cb1-task_6-0 --use-prefiltered prefiltered_telemetry --no-video --live-view
+    python clients/tree_traversal/run_market_cb1.py --live-view --no-video --live-view --parallel 8 --eval-id test-v1
 """
 
 import argparse
 import csv
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -45,7 +51,7 @@ DATASET = "openrca_market_cb1"
 MAX_STEPS = 60
 
 # 10 single-fault problems with diverse reasons/components/levels
-TARGET_INDICES = [8, 13, 21, 25, 26, 29, 32, 33, 50, 61]
+TARGET_INDICES = [0, 1, 2, 3, 4, 5, 8, 12, 13, 15]
 
 SCORE_FIELDS = [
     "timestamp", "eval_id", "model", "problem_id",
@@ -60,6 +66,43 @@ SCORE_FIELDS = [
 
 def extract_dataset_key(problem_id: str) -> str:
     return problem_id.rsplit("-", 2)[0]
+
+
+def prefiltered_dataset_dirnames(dataset_key: str) -> list[str]:
+    """Return acceptable prefiltered directory names for this runner."""
+    aliases = [dataset_key]
+    if dataset_key == "openrca_market_cb1":
+        aliases.append("openrca_market_cloudbed1")
+    return aliases
+
+
+def _prefiltered_task_sort_key(task_name: str) -> tuple[int, int, str]:
+    """Sort task_6-0 before task_6-10, and unknown names last."""
+    text = str(task_name or "").strip()
+    m = re.match(r"^task_(\d+)-(\d+)$", text)
+    if not m:
+        return (10**9, 10**9, text)
+    return (int(m.group(1)), int(m.group(2)), text)
+
+
+def list_prefiltered_problem_ids(
+    prefiltered_root: Path,
+    dataset_key: str,
+    *,
+    dataset_dirnames: list[str] | None = None,
+) -> list[str]:
+    """Return problem ids backed by existing prefiltered task directories."""
+    root = prefiltered_root.resolve()
+    dirnames = dataset_dirnames or [dataset_key]
+    task_names: set[str] = set()
+    for dirname in dirnames:
+        ds_dir = root / dirname
+        if not ds_dir.is_dir():
+            continue
+        for child in ds_dir.iterdir():
+            if child.is_dir() and child.name.startswith("task_"):
+                task_names.add(child.name)
+    return [f"{dataset_key}-{task}" for task in sorted(task_names, key=_prefiltered_task_sort_key)]
 
 
 _scores_lock = threading.Lock()
@@ -166,7 +209,10 @@ def run_single_problem(
     llm_configs: dict,
     worker_id: int = 0,
 ) -> dict | None:
-    condition = f"w{worker_id}" if args.parallel > 1 else None
+    if args.use_prefiltered is not None:
+        condition = None
+    else:
+        condition = f"w{worker_id}" if args.parallel > 1 else None
     dataset_key = extract_dataset_key(pid)
 
     # Make a shallow copy of llm_configs so that per-problem token usage
@@ -187,7 +233,9 @@ def run_single_problem(
 
     try:
         problem_desc, instructs, apis = orchestrator.init_problem(
-            pid, condition=condition,
+            pid,
+            condition=condition,
+            skip_deploy=(args.use_prefiltered is not None),
         )
         problem = orchestrator.session.problem
 
@@ -207,8 +255,30 @@ def run_single_problem(
         use_executor = dataset_config.get("executor", {}).get("enable", True)
         basic_prompt = get_basic_prompt(dataset_key)
 
+        if args.use_prefiltered is not None:
+            pid_suffix = pid.split("-", maxsplit=1)[1] if "-" in pid else pid
+            legacy_task_id = getattr(problem, "task_type", None) or getattr(problem.app.query_info, "task_id", None)
+            candidate_paths = []
+            for dirname in prefiltered_dataset_dirnames(dataset_key):
+                dataset_prefiltered_dir = args.use_prefiltered.resolve() / dirname
+                candidate_paths.append(dataset_prefiltered_dir / pid_suffix)
+            if legacy_task_id:
+                for dirname in prefiltered_dataset_dirnames(dataset_key):
+                    dataset_prefiltered_dir = args.use_prefiltered.resolve() / dirname
+                    candidate_paths.append(dataset_prefiltered_dir / legacy_task_id)
+            candidate_paths.append(args.use_prefiltered.resolve() / pid_suffix)
+            if legacy_task_id:
+                candidate_paths.append(args.use_prefiltered.resolve() / legacy_task_id)
+            base_dir = next((p for p in candidate_paths if p.exists()), candidate_paths[0])
+            base_path = str(base_dir)
+            container_name = None
+        else:
+            base_path = None
+            container_name = problem.app.get_container_name()
+
         actions = StaticRCAActionsWithExecutor(
-            container_name=problem.app.get_container_name(),
+            container_name=container_name,
+            base_path=base_path,
             possible_root_causes=dataset_config.get("possible_root_causes"),
             telemetry_flags=dataset_config.get("telemetry"),
             use_executor=use_executor,
@@ -287,8 +357,9 @@ def run_single_problem(
             sprint=sprint,
             problem=problem,
             render_localization_timeline=args.timeline,
+            expand_max_hops=1,
             use_controller_deep_dive=not args.no_controller_deep_dive,
-            use_controller_expand=args.controller,
+            use_controller_expand=not args.no_controller_expand,
             live_viewer=live_viewer,
         )
 
@@ -337,7 +408,7 @@ def run_single_problem(
         correct_time = ""
         if gt_time and pred_time:
             try:
-                from datetime import datetime as _dt, timezone
+                from datetime import datetime as _dt
                 t1 = _dt.strptime(gt_time.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 t2 = _dt.strptime(pred_time.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 time_diff_min = round((t2 - t1).total_seconds() / 60.0, 1)
@@ -431,11 +502,17 @@ def parse_args():
                         help="Render localization timeline (Manim, x-axis=time) after stage1")
     parser.add_argument("--no-controller-deep-dive", action="store_true",
                         help="Disable controller-driven deep dive (use fixed execute×reason pipeline)")
-    parser.add_argument("--controller", action="store_true",
-                        help="Use controller-driven expand (multi-turn agent↔actions)")
+    parser.add_argument("--no-controller-expand", action="store_true",
+                        help="Disable controller-driven expand and use graph-only expand")
     parser.add_argument("--live-view", action="store_true",
                         help="실시간(on-process) matplotlib 창으로 그래프 갱신 (x=시간 타임라인)")
     parser.add_argument("--parallel", type=int, default=1)
+    parser.add_argument(
+        "--use-prefiltered",
+        type=Path,
+        default=None,
+        help="Read telemetry from prefiltered dir instead of Docker/runtime process_telemetry",
+    )
     return parser.parse_args()
 
 
@@ -451,10 +528,31 @@ if __name__ == "__main__":
     )
     llm_configs = load_config(api_config_path)
 
+    prefiltered_dir = args.use_prefiltered.resolve() if args.use_prefiltered else None
+    if prefiltered_dir is not None and not prefiltered_dir.is_dir():
+        raise SystemExit(f"Prefiltered dir not found or not a directory: {prefiltered_dir}")
+
     if args.problem:
-        problem_ids = [args.problem]
+        if args.problem.strip().lower() == "all":
+            if prefiltered_dir is not None:
+                problem_ids = list_prefiltered_problem_ids(
+                    prefiltered_dir,
+                    DATASET,
+                    dataset_dirnames=prefiltered_dataset_dirnames(DATASET),
+                )
+            else:
+                problem_ids = build_problem_ids(indices=None)
+        else:
+            problem_ids = [args.problem]
     elif args.all:
-        problem_ids = build_problem_ids(indices=None)
+        if prefiltered_dir is not None:
+            problem_ids = list_prefiltered_problem_ids(
+                prefiltered_dir,
+                DATASET,
+                dataset_dirnames=prefiltered_dataset_dirnames(DATASET),
+            )
+        else:
+            problem_ids = build_problem_ids(indices=None)
     else:
         problem_ids = build_problem_ids(indices=TARGET_INDICES)
 
