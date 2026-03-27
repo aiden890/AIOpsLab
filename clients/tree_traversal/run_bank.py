@@ -228,7 +228,7 @@ def run_single_problem(
         correct_time = ""
         if gt_time and pred_time:
             try:
-                from datetime import datetime as _dt, timezone
+                from datetime import datetime as _dt
                 t1 = _dt.strptime(gt_time.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 t2 = _dt.strptime(pred_time.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 time_diff_min = round((t2 - t1).total_seconds() / 60.0, 1)
