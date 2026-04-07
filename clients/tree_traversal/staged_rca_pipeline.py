@@ -21,7 +21,6 @@ import os
 import re
 import subprocess
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock
@@ -33,7 +32,9 @@ from aiopslab.orchestrator.static_actions.trace_path_renderer import (
 
 from clients.openrca_rca.api_router import get_chat_completion
 from clients.tree_traversal.controller_stage import run_controller_stage
+from clients.tree_traversal.deep_dive_stage import run_deep_dive_controller
 from clients.tree_traversal.dataset_profile import DatasetProfile
+from clients.tree_traversal.trace_expand_stage import run_trace_expand_controller
 from clients.tree_traversal.graph import (
     get_graphs,
     get_related_components_for_expand,
@@ -351,12 +352,18 @@ You MUST choose exactly one of the following as `reason` when you submit. No oth
 
 ## Decision principles
 
-- Pick an existing node from the tree by `node_id`. Do not invent a new node.
-- Prefer a node whose **own KPI evidence** looks operationally problematic, not just visually different.
-- Prefer nodes that can **explain downstream anomalies** on their descendants or related branches.
+- Pick an existing candidate from the tree by `node_id`. Do not invent a new candidate.
+- Pick an existing candidate from the tree. Do not invent a new candidate.
+- Prefer a candidate whose **own KPI evidence** looks operationally problematic, not just visually different.
+- Prefer candidates that can **explain downstream anomalies** on their descendants or related branches.
 - Do not over-prefer generic symptom nodes if there is a deeper KPI-based cause such as CPU, DB, network, disk, queue, or service-down evidence.
 - Use topology/path information, relation types, localization severity, and expand evidence together.
-- If deep-dive evidence is present (either dedicated deep-dive nodes or node-level deep_dive_* fields), treat it as stronger per-node evidence than raw reason hints.
+- If cross-candidate relations/topology evidence are weak or inconclusive, prioritize KPI semantics and absolute operational impact over topology links.
+- In that case, prefer candidates with stronger problematic-value evidence (`value_is_problematic`, `value_judgment`, `anomaly_value`, persistence) rather than the largest single relative spike.
+- If deep-dive evidence is present (either dedicated deep-dive nodes or node-level deep_dive_* fields), treat it as stronger per-candidate evidence than raw reason hints.
+- Respect causal direction hints from trace-expand:
+  - upstream_cause > downstream_effect > ambiguous for root-cause selection.
+  - ambiguous nodes may stay as follow-up candidates but should not be preferred as final root cause unless no stronger candidate exists.
 - Use the provided time on the chosen node unless you can refine it slightly within the same episode; if you refine it, keep it within the query window.
 
 ## Network fault hints (caller-callee trace path)
@@ -375,7 +382,7 @@ You MUST choose exactly one of the following as `reason` when you submit. No oth
 Return ONLY one JSON object:
 {{
   "decision": "final|investigate_more",
-  "node_id": "<existing node id from the tree>",
+  "node_id": "<optional: existing node id from the tree>",
   "component": "<component name of the chosen node>",
   "reason": "<exactly one from the allowed list above>",
   "time": "<YYYY-MM-DD HH:MM:SS>",
@@ -394,7 +401,7 @@ Return ONLY one JSON object:
 }}
 
 Rules:
-- If decision is "final", fill node_id/component/reason/time/confidence and optionally supporting_path.
+- If decision is "final", fill component/reason/time/confidence and optionally node_id/supporting_path.
 - If decision is "investigate_more", provide 1-3 follow_up_candidates and leave final fields empty or minimal.
 """
 
@@ -457,7 +464,8 @@ class StagedRCAPipeline:
         use_controller_deep_dive: bool = True,
         use_controller_expand: bool = True,   # default: use controller-based expand
         enable_expand: bool = True,           # whether Stage 3 expand is enabled at all
-        enable_deep_dive: bool = False,       # whether Stage 2 per-node deep dive runs
+        enable_deep_dive: bool = True,        # whether Stage 2 per-node deep dive runs
+        enable_trace_path_vision_localize: bool = False,  # Stage1 trace_anomalous_path vision critic
         expand_max_hops: int = 2,             # 1 = localization→expand only; 2 = +2nd hop from expand nodes
         live_viewer=None,           # LiveTreeViewer or list of them (timeline + tree)
     ):
@@ -475,12 +483,16 @@ class StagedRCAPipeline:
         self.use_controller_expand = use_controller_expand
         self.enable_expand = enable_expand
         self.enable_deep_dive = enable_deep_dive
+        self.enable_trace_path_vision_localize = bool(enable_trace_path_vision_localize)
         self.expand_max_hops = max(1, min(expand_max_hops, 2))
         self.live_viewer = live_viewer
         self._controller_action_lock = Lock()
         self._expand_cache_lock = Lock()
         self._expand_verdict_cache: dict[str, list[dict]] = {}
         self._trace_anomaly_edges: list[dict] = []
+        self._expand_component_existing_count: dict[str, int] = {}
+        self._last_expand_stop_due_existing_count: bool = False
+        self._last_expand_stop_components: list[str] = []
         # Keep filtered-out localization metric hints as auxiliary evidence.
         # key: component, value: list[dict(change, duration_approx, anomaly_value, ...)]
         self._filtered_localize_aux: dict[str, list[dict]] = {}
@@ -838,6 +850,9 @@ class StagedRCAPipeline:
         for nid, node in self.tree.nodes.items():
             if nid == "root" or node.status == "pruned":
                 continue
+            dd_verdict = str(getattr(node, "deep_dive_verdict", "") or "").strip().lower()
+            if dd_verdict == "noise":
+                continue
             parent = self.tree.nodes.get(node.parent_id or "")
             evidence = (getattr(node, "evidence", "") or "").replace("\n", " ").strip()
             if len(evidence) > 280:
@@ -848,6 +863,7 @@ class StagedRCAPipeline:
                     "stage": node.stage,
                     "status": node.status,
                     "component": node.component,
+                    "level": self._get_level(node.component),
                     "parent_id": node.parent_id,
                     "parent_component": parent.component if parent else "",
                     "children": list(node.children),
@@ -863,10 +879,20 @@ class StagedRCAPipeline:
                     "localized_severity": float(getattr(node, "localized_severity", 0.0) or 0.0),
                     "deep_dive_reason": getattr(node, "deep_dive_reason", None),
                     "deep_dive_reason_class": getattr(node, "deep_dive_reason_class", None),
+                    "deep_dive_verdict": getattr(node, "deep_dive_verdict", None),
                     "deep_dive_confidence": float(getattr(node, "deep_dive_confidence", 0.0) or 0.0),
+                    "deep_dive_confidence_avg": float(
+                        getattr(node, "deep_dive_confidence_avg", 0.0) or 0.0
+                    ),
+                    "deep_dive_confidence_count": int(
+                        getattr(node, "deep_dive_confidence_count", 0) or 0
+                    ),
                     "deep_dive_time": getattr(node, "deep_dive_time", None),
                     "deep_dive_evidence": (getattr(node, "deep_dive_evidence", "") or "")[:600],
                     "deep_dive_checked_reasons": list(getattr(node, "deep_dive_checked_reasons", []) or [])[:8],
+                    "deep_dive_next_kpis": list(getattr(node, "deep_dive_next_kpis", []) or [])[:12],
+                    "deep_dive_edge_targets": list(getattr(node, "deep_dive_edge_targets", []) or [])[:8],
+                    "related_parent_components": list(getattr(node, "related_parent_components", []) or [])[:8],
                     "evidence": evidence,
                     "filtered_localize_aux": self._get_filtered_localize_aux_for_node(
                         node.component,
@@ -954,6 +980,71 @@ class StagedRCAPipeline:
                     "metadata": group.get("metadata") or {},
                 }
             )
+        # Add service->pod containment groups from graph.py deployment_graph.
+        # This helps global judge reason about service-level vs pod-level consistency
+        # using explicit dataset topology, not heuristic alias inference.
+        try:
+            node_comp_map: dict[str, str] = {
+                str(item.get("id") or "").strip(): str(item.get("component") or "").strip()
+                for item in nodes_payload
+                if str(item.get("id") or "").strip() and str(item.get("component") or "").strip()
+            }
+            comp_to_node_ids: dict[str, list[str]] = {}
+            for nid, comp in node_comp_map.items():
+                comp_to_node_ids.setdefault(comp, []).append(nid)
+
+            graphs = get_graphs(self._get_dependency_graph_dataset_key())
+            deployment_graph = graphs.get("deployment_graph") or {}
+            service_to_members: dict[str, list[str]] = {}
+            for container_comp, members in deployment_graph.items():
+                service = str(container_comp or "").strip()
+                if not service or self._get_level(service) != "service":
+                    continue
+                mids: list[str] = []
+                for member_comp in (members or []):
+                    member = str(member_comp or "").strip()
+                    if not member or self._get_level(member) != "pod":
+                        continue
+                    for nid in comp_to_node_ids.get(member, []):
+                        if nid not in mids:
+                            mids.append(nid)
+                if mids:
+                    service_to_members[service] = mids
+
+            existing_keys: set[tuple[str, tuple[str, ...], str]] = set()
+            for g in containment_groups_payload:
+                cc = str(g.get("container_component") or "").strip()
+                mids = tuple(sorted(str(x).strip() for x in (g.get("member_node_ids") or []) if str(x).strip()))
+                rf = str(g.get("relation_family") or "").strip()
+                existing_keys.add((cc, mids, rf))
+
+            for service, mids in service_to_members.items():
+                member_ids = [x for x in dict.fromkeys(mids) if x in included_node_ids]
+                if not member_ids:
+                    continue
+                key = (service, tuple(sorted(member_ids)), "service_contains")
+                if key in existing_keys:
+                    continue
+                member_components = [
+                    node_comp_map.get(mid, "")
+                    for mid in member_ids
+                    if node_comp_map.get(mid, "")
+                ]
+                label = f"{service} ({', '.join(member_components)})" if member_components else service
+                containment_groups_payload.append(
+                    {
+                        "container_node_id": None,
+                        "container_component": service,
+                        "member_node_ids": member_ids,
+                        "relation_family": "service_contains",
+                        "relation_type": "contains",
+                        "label": label,
+                        "metadata": {"member_components": member_components},
+                    }
+                )
+        except Exception:
+            # Best-effort enrichment only; keep judge summary robust.
+            pass
 
         leaf_ids = [
             nid for nid, node in self.tree.nodes.items()
@@ -1200,6 +1291,18 @@ class StagedRCAPipeline:
                 "Choose final root cause, or request additional deep dive on 1-3 candidates if needed.\n\n"
                 f"{tree_summary}"
             )
+            try:
+                prompt_path = self.save_dir / f"global_judge_input_attempt_{attempt + 1}.txt"
+                prompt_payload = (
+                    "[SYSTEM]\n"
+                    + str(system or "")
+                    + "\n\n[USER]\n"
+                    + str(user_message or "")
+                )
+                prompt_path.write_text(prompt_payload, encoding="utf-8")
+                self._log_service(f"[Global Judge] Prompt input saved to {prompt_path}")
+            except Exception as e:
+                self._log_service(f"[Global Judge] Failed to save prompt input: {e}")
             raw = get_chat_completion(
                 [
                     {"role": "system", "content": system},
@@ -1288,6 +1391,33 @@ class StagedRCAPipeline:
                 )
                 return None
 
+            chosen_level = self._get_level(chosen.component)
+            verdict_level = str(verdict.get("component_level") or "").strip().lower()
+            if verdict_level in {"node", "pod", "service"} and verdict_level != chosen_level:
+                self._log_service(
+                    f"[Global Judge] Note: verdict.component_level={verdict_level!r} "
+                    f"differs from inferred level={chosen_level!r} for component={chosen.component!r}."
+                )
+            if chosen_level == "node":
+                impact_state, impacted_pods, hosted_pods, impact_ratio = self._has_broad_colocated_pod_impact(
+                    chosen.component,
+                    chosen.time,
+                    window_min=10,
+                    min_ratio=0.5,
+                )
+                if impact_state == "weak":
+                    self._log_service(
+                        f"[Global Judge] Node-vs-pod warning: chosen node={chosen.component!r} "
+                        f"has weak broad pod impact (impacted_pods={impacted_pods!r}, "
+                        f"hosted_pods={hosted_pods}, impact_ratio={impact_ratio:.3f}). "
+                        "Keeping original global judge selection (re-evaluation disabled)."
+                    )
+                elif impact_state == "unknown":
+                    self._log_service(
+                        f"[Global Judge] Node-vs-pod impact unknown for node={chosen.component!r} "
+                        "(host/deployment evidence unavailable or hosted_pods=0)."
+                    )
+
             conf_raw = verdict.get("confidence", 0.0)
             try:
                 confidence = float(conf_raw)
@@ -1338,6 +1468,598 @@ class StagedRCAPipeline:
 
     # ── main entry point ─────────────────────────────────────────────
 
+    def _summarize_tree_for_expand(self, focus_node_id: str | None = None) -> str:
+        lines: list[str] = []
+        for node in sorted(self.tree.nodes.values(), key=lambda n: (n.step, n.id)):
+            if node.id == "root":
+                continue
+            lines.append(
+                f"- {node.id}: component={node.component}, stage={node.stage}, status={node.status}, "
+                f"time={node.time}, parent={node.parent_id}, related_parents={getattr(node, 'related_parent_components', [])}, "
+                f"reason={node.reason}, confidence={float(getattr(node, 'confidence', 0.0) or 0.0):.2f}, "
+                f"deep_dive_verdict={getattr(node, 'deep_dive_verdict', None)}, "
+                f"deep_dive_reason={getattr(node, 'deep_dive_reason_class', None)}"
+                + (" <-- current hypothesis" if focus_node_id and node.id == focus_node_id else "")
+            )
+        if self.tree.relation_edges:
+            lines.append("Relation edges:")
+            for edge in self.tree.relation_edges[-24:]:
+                lines.append(
+                    f"- {edge.get('src_component')} -> {edge.get('dst_component')} "
+                    f"[{edge.get('relation_family')}/{edge.get('relation_type')}] "
+                    f"time={edge.get('time')}"
+                )
+        if self.tree.containment_groups:
+            lines.append("Containment groups:")
+            for group in self.tree.containment_groups[-16:]:
+                lines.append(
+                    f"- container={group.get('container_component')} members={group.get('member_node_ids')}"
+                )
+        return "\n".join(lines[:140]) if lines else "(tree empty)"
+
+    def _build_causal_graph_snapshot(self) -> dict:
+        """Build a lightweight causal-graph snapshot from current tree state."""
+        nodes: list[dict] = []
+        edges: list[dict] = []
+
+        # Include nodes with anomaly evidence (deep-dive anomaly) and expand nodes.
+        node_ids: set[str] = set()
+        for node in self.tree.nodes.values():
+            if node is None or node.id == "root":
+                continue
+            stage = str(getattr(node, "stage", "") or "").strip().lower()
+            dd_verdict = str(getattr(node, "deep_dive_verdict", "") or "").strip().lower()
+            if stage == "expand" or dd_verdict == "anomaly":
+                node_ids.add(node.id)
+                nodes.append(
+                    {
+                        "id": node.id,
+                        "component": str(getattr(node, "component", "") or "").strip(),
+                        "level": self._get_level(getattr(node, "component", "") or ""),
+                        "stage": stage,
+                        "time": str(getattr(node, "time", "") or "").strip(),
+                        "deep_dive_verdict": dd_verdict or None,
+                        "deep_dive_reason": str(
+                            getattr(node, "deep_dive_reason_class", "") or ""
+                        ).strip()
+                        or None,
+                        "deep_dive_confidence": float(
+                            getattr(node, "deep_dive_confidence_avg", 0.0)
+                            or getattr(node, "deep_dive_confidence", 0.0)
+                            or 0.0
+                        ),
+                    }
+                )
+
+        # Parent-child edges among selected nodes.
+        for node_id in list(node_ids):
+            node = self.tree.nodes.get(node_id)
+            if node is None:
+                continue
+            pid = str(getattr(node, "parent_id", "") or "").strip()
+            if pid and pid in node_ids:
+                edges.append(
+                    {
+                        "src_id": pid,
+                        "dst_id": node_id,
+                        "type": "tree_parent_child",
+                    }
+                )
+
+        # Relation edges whose endpoints are present.
+        for edge in getattr(self.tree, "relation_edges", []) or []:
+            src = str(edge.get("src_node_id") or "").strip()
+            dst = str(edge.get("dst_node_id") or "").strip()
+            if not src or not dst:
+                continue
+            if src not in node_ids or dst not in node_ids:
+                continue
+            edges.append(
+                {
+                    "src_id": src,
+                    "dst_id": dst,
+                    "type": "relation",
+                    "relation_family": str(edge.get("relation_family") or "").strip(),
+                    "relation_type": str(edge.get("relation_type") or "").strip(),
+                    "time": str(edge.get("time") or "").strip(),
+                    "label": str(edge.get("label") or "").strip(),
+                }
+            )
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "stats": {
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+            },
+        }
+
+    def _build_seed_graph_snapshot(self, seed_ids: list[str]) -> dict:
+        """Build seed-only graph snapshot from deep-dive survivors."""
+        seed_set = {str(x).strip() for x in (seed_ids or []) if str(x).strip()}
+        nodes: list[dict] = []
+        edges: list[dict] = []
+        if not seed_set:
+            return {
+                "nodes": [],
+                "edges": [],
+                "stats": {"node_count": 0, "edge_count": 0},
+            }
+
+        for nid in seed_set:
+            node = self.tree.nodes.get(nid)
+            if node is None:
+                continue
+            nodes.append(
+                {
+                    "id": nid,
+                    "component": str(getattr(node, "component", "") or "").strip(),
+                    "level": self._get_level(getattr(node, "component", "") or ""),
+                    "stage": str(getattr(node, "stage", "") or "").strip().lower(),
+                    "time": str(getattr(node, "time", "") or "").strip(),
+                    "deep_dive_verdict": str(getattr(node, "deep_dive_verdict", "") or "").strip().lower()
+                    or None,
+                    "deep_dive_reason": str(getattr(node, "deep_dive_reason_class", "") or "").strip()
+                    or None,
+                    "deep_dive_confidence": float(
+                        getattr(node, "deep_dive_confidence_avg", 0.0)
+                        or getattr(node, "deep_dive_confidence", 0.0)
+                        or 0.0
+                    ),
+                }
+            )
+
+        # Relation edges among surviving seeds only.
+        for edge in getattr(self.tree, "relation_edges", []) or []:
+            src = str(edge.get("src_node_id") or "").strip()
+            dst = str(edge.get("dst_node_id") or "").strip()
+            if not src or not dst or src not in seed_set or dst not in seed_set:
+                continue
+            edges.append(
+                {
+                    "src_id": src,
+                    "dst_id": dst,
+                    "type": "relation",
+                    "relation_family": str(edge.get("relation_family") or "").strip(),
+                    "relation_type": str(edge.get("relation_type") or "").strip(),
+                    "time": str(edge.get("time") or "").strip(),
+                    "label": str(edge.get("label") or "").strip(),
+                }
+            )
+
+        return {
+            "nodes": nodes,
+            "edges": edges,
+            "stats": {
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+            },
+        }
+
+    def _render_snapshot_png(self, payload: dict, out_path: Path, *, title: str) -> None:
+        """Render compact graph PNG from snapshot payload."""
+        try:
+            import matplotlib.pyplot as plt
+        except Exception:
+            self._log_service(f"[Graph] matplotlib not available; skip PNG render: {out_path}")
+            return
+
+        nodes = [n for n in (payload.get("nodes") or []) if isinstance(n, dict)]
+        edges = [e for e in (payload.get("edges") or []) if isinstance(e, dict)]
+        if not nodes:
+            fig, ax = plt.subplots(figsize=(8, 3))
+            ax.text(0.5, 0.5, "No nodes", ha="center", va="center", fontsize=12, color="#666")
+            ax.set_title(title, fontsize=11)
+            ax.set_axis_off()
+            fig.tight_layout()
+            try:
+                fig.savefig(out_path, dpi=160, bbox_inches="tight")
+            finally:
+                plt.close(fig)
+            return
+
+        by_id = {str(n.get("id") or "").strip(): n for n in nodes}
+        ordered = sorted(
+            nodes,
+            key=lambda n: (
+                str(n.get("time") or ""),
+                str(n.get("stage") or ""),
+                str(n.get("component") or ""),
+                str(n.get("id") or ""),
+            ),
+        )
+
+        y_map = {"localize": 2.0, "deep_dive": 1.3, "expand": 0.6}
+        positions: dict[str, tuple[float, float]] = {}
+        for idx, n in enumerate(ordered):
+            nid = str(n.get("id") or "").strip()
+            stage = str(n.get("stage") or "").strip().lower()
+            x = float(idx)
+            y = float(y_map.get(stage, 1.0))
+            positions[nid] = (x, y)
+
+        width = max(10.0, 0.9 * max(8, len(ordered)))
+        fig, ax = plt.subplots(figsize=(width, 4.8))
+
+        for e in edges:
+            src = str(e.get("src_id") or "").strip()
+            dst = str(e.get("dst_id") or "").strip()
+            if src not in positions or dst not in positions:
+                continue
+            sx, sy = positions[src]
+            dx, dy = positions[dst]
+            et = str(e.get("type") or "").strip().lower()
+            color = "#7F8C8D" if et == "relation" else "#4A90D9"
+            ax.annotate(
+                "",
+                xy=(dx, dy),
+                xytext=(sx, sy),
+                arrowprops={
+                    "arrowstyle": "->",
+                    "color": color,
+                    "lw": 1.2,
+                    "alpha": 0.85,
+                    "shrinkA": 10,
+                    "shrinkB": 10,
+                },
+                zorder=1,
+            )
+
+        stage_colors = {"localize": "#AED6F1", "deep_dive": "#F9E79F", "expand": "#F5B7B1"}
+        for nid, (x, y) in positions.items():
+            n = by_id.get(nid) or {}
+            stage = str(n.get("stage") or "").strip().lower()
+            comp = str(n.get("component") or "").strip() or nid
+            t = str(n.get("time") or "").strip()
+            conf = float(n.get("deep_dive_confidence", 0.0) or 0.0)
+            fill = stage_colors.get(stage, "#D5DBDB")
+            circle = plt.Circle((x, y), 0.18, facecolor=fill, edgecolor="#2C3E50", linewidth=1.2, zorder=2)
+            ax.add_patch(circle)
+            t_short = t.split()[1] if " " in t else t
+            label = f"{comp[:20]}\n{t_short}\n{int(round(conf * 100))}%"
+            ax.text(x, y - 0.28, label, ha="center", va="top", fontsize=7, zorder=3)
+
+        xs = [p[0] for p in positions.values()]
+        ys = [p[1] for p in positions.values()]
+        ax.set_xlim(min(xs) - 0.8, max(xs) + 0.8)
+        ax.set_ylim(min(ys) - 1.0, max(ys) + 0.7)
+        ax.set_title(title, fontsize=11)
+        ax.set_axis_off()
+        fig.tight_layout()
+        try:
+            fig.savefig(out_path, dpi=160, bbox_inches="tight")
+        finally:
+            plt.close(fig)
+
+    def _save_seed_graph_snapshot(
+        self,
+        *,
+        iteration: int,
+        seed_ids: list[str],
+    ) -> None:
+        """Persist seed-only graph snapshot JSON/PNG for this iteration."""
+        try:
+            out_dir = self.save_dir / "seed_graph"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            payload = self._build_seed_graph_snapshot(seed_ids)
+            payload["metadata"] = {
+                "iteration": int(iteration),
+                "seed_count": len(seed_ids),
+                "seed_ids": [str(x) for x in seed_ids[:200]],
+            }
+            json_path = out_dir / f"seed_graph_iter_{int(iteration)}.json"
+            with json_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            png_path = out_dir / f"seed_graph_iter_{int(iteration)}.png"
+            self._render_snapshot_png(
+                payload,
+                png_path,
+                title=f"Seed Graph (Iteration {int(iteration)})",
+            )
+            self._log_service(
+                f"[Seed Graph] Saved snapshot: {json_path} | {png_path} "
+                f"(nodes={int((payload.get('stats') or {}).get('node_count', 0))}, "
+                f"edges={int((payload.get('stats') or {}).get('edge_count', 0))})"
+            )
+        except Exception as e:
+            self._log_service(f"[Seed Graph] Failed to save snapshot: {e}")
+
+    def _run_expand_need_verifier(self, *, iteration: int, seed_ids: list[str]) -> dict:
+        """LLM verifier: decide if trace-expand is needed and rank strong local nodes."""
+        seed_items: list[dict] = []
+        for nid in (seed_ids or []):
+            node = self.tree.nodes.get(nid)
+            if node is None:
+                continue
+            comp = str(getattr(node, "component", "") or "").strip()
+            if not comp:
+                continue
+            seed_items.append(
+                {
+                    "node_id": nid,
+                    "component": comp,
+                    "level": self._get_level(comp),
+                    "time": str(getattr(node, "time", "") or "").strip(),
+                    "severity": float(getattr(node, "severity", 0.0) or 0.0),
+                    "reason_hint": str(getattr(node, "reason", "") or "").strip(),
+                    "kpi": str(getattr(node, "kpi", "") or "").strip(),
+                    "deep_dive_verdict": str(getattr(node, "deep_dive_verdict", "") or "").strip().lower(),
+                    "deep_dive_reason": str(getattr(node, "deep_dive_reason_class", "") or "").strip(),
+                    "deep_dive_confidence": float(
+                        getattr(node, "deep_dive_confidence_avg", 0.0)
+                        or getattr(node, "deep_dive_confidence", 0.0)
+                        or 0.0
+                    ),
+                }
+            )
+
+        verifier_system = """You are an RCA verifier.
+Given localized/deep-dive anomalies, decide whether expand should inspect trace/mesh edges.
+
+Output ONLY JSON:
+{
+  "mode": "local_strong|network_strong|mixed|insufficient",
+  "causality_confident": true|false,
+  "recommend_trace_expand": true|false,
+  "strong_local_components": [{"component":"...","component_level":"node|pod|service","score":0.0-1.0,"why":"..."}]
+}
+
+Rules:
+- If local resource signals (CPU/memory/disk/io) dominate and are coherent, set mode=local_strong and recommend_trace_expand=false.
+- If network/latency/packet/edge-direction signals dominate:
+  - If causality is already confident, set recommend_trace_expand=false.
+  - If causality is unclear, set recommend_trace_expand=true.
+- strong_local_components must include component + component_level, sorted by score desc.
+"""
+        verifier_user = (
+            f"Dataset={self.profile.name!r}, iteration={int(iteration)}\n"
+            f"Seed anomalies JSON:\n{json.dumps(seed_items, ensure_ascii=False, indent=2)}\n\n"
+            "Return JSON only."
+        )
+
+        raw = ""
+        payload: dict = {
+            "mode": "insufficient",
+            "recommend_trace_expand": True,
+            "strong_local_nodes": [],
+            "error": "",
+        }
+        try:
+            raw = get_chat_completion(
+                [
+                    {"role": "system", "content": verifier_system},
+                    {"role": "user", "content": verifier_user},
+                ],
+                self.configs,
+                temperature=0.0,
+            )
+            parsed = json.loads(self._extract_json(raw))
+            mode = str(parsed.get("mode") or "").strip().lower()
+            if mode not in {"local_strong", "network_strong", "mixed", "insufficient"}:
+                mode = "insufficient"
+            causality_confident = bool(parsed.get("causality_confident", False))
+            recommend_trace = bool(parsed.get("recommend_trace_expand", True))
+            # Final guardrail: if network is strong but causality is already confident,
+            # skip trace-expand to avoid unnecessary expansion.
+            if mode == "network_strong" and causality_confident:
+                recommend_trace = False
+            strong_components = []
+            for item in (parsed.get("strong_local_components") or [])[:64]:
+                if not isinstance(item, dict):
+                    continue
+                comp = str(item.get("component") or "").strip()
+                level = str(item.get("component_level") or "").strip().lower()
+                if not comp:
+                    continue
+                inferred_level = self._get_level(comp)
+                if level not in {"node", "pod", "service"}:
+                    level = inferred_level or "service"
+                if inferred_level in {"node", "pod", "service"} and level != inferred_level:
+                    level = inferred_level
+                try:
+                    score = float(item.get("score", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    score = 0.0
+                strong_components.append(
+                    {
+                        "component": comp,
+                        "component_level": level,
+                        "score": max(0.0, min(1.0, score)),
+                        "why": str(item.get("why") or "").strip(),
+                    }
+                )
+            strong_components.sort(
+                key=lambda x: (
+                    -float(x.get("score", 0.0) or 0.0),
+                    str(x.get("component_level") or ""),
+                    str(x.get("component") or ""),
+                )
+            )
+            payload = {
+                "mode": mode,
+                "causality_confident": causality_confident,
+                "recommend_trace_expand": recommend_trace,
+                "strong_local_components": strong_components[:32],
+            }
+        except Exception as e:
+            payload = {
+                "mode": "insufficient",
+                "causality_confident": False,
+                "recommend_trace_expand": True,
+                "strong_local_components": [],
+                "error": str(e),
+                "raw": raw[:2000],
+            }
+
+        out = {
+            "iteration": int(iteration),
+            "seed_ids": [str(x) for x in (seed_ids or [])[:200]],
+            "llm_verdict": payload,
+        }
+        try:
+            out_dir = self.save_dir / "verifier"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"verifier_iter_{int(iteration)}.json"
+            out_path.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._log_service(
+                f"[Verifier] llm mode={payload.get('mode')!r}, "
+                f"recommend_trace_expand={bool(payload.get('recommend_trace_expand', True))}, "
+                f"strong_local_components={[x.get('component') for x in (payload.get('strong_local_components') or [])[:8]]} "
+                f"(saved: {out_path})"
+            )
+        except Exception as e:
+            self._log_service(f"[Verifier] Failed to save verifier snapshot: {e}")
+        return payload
+
+    def _save_causal_graph_snapshot(
+        self,
+        *,
+        iteration: int,
+        seed_ids: list[str],
+        new_child_ids: list[str],
+    ) -> None:
+        """Persist causal-graph snapshot JSON for this iteration."""
+        try:
+            out_dir = self.save_dir / "causal_graph"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            payload = self._build_causal_graph_snapshot()
+            payload["metadata"] = {
+                "iteration": int(iteration),
+                "seed_count": len(seed_ids),
+                "seed_ids": [str(x) for x in seed_ids[:200]],
+                "new_child_count": len(new_child_ids),
+                "new_child_ids": [str(x) for x in new_child_ids[:500]],
+            }
+            json_path = out_dir / f"causal_graph_iter_{int(iteration)}.json"
+            with json_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            png_path = out_dir / f"causal_graph_iter_{int(iteration)}.png"
+            self._render_snapshot_png(
+                payload,
+                png_path,
+                title=f"Causal Graph (Iteration {int(iteration)})",
+            )
+            self._log_service(
+                f"[Causal Graph] Saved snapshot: {json_path} | {png_path} "
+                f"(nodes={int((payload.get('stats') or {}).get('node_count', 0))}, "
+                f"edges={int((payload.get('stats') or {}).get('edge_count', 0))})"
+            )
+        except Exception as e:
+            self._log_service(f"[Causal Graph] Failed to save snapshot: {e}")
+
+    def _run_iterative_deep_dive_expand(self, seed_ids: list[str], max_iterations: int) -> None:
+        frontier = list(seed_ids)
+        expanded_from: set[str] = set()
+        for iteration in range(1, max_iterations + 1):
+            if not frontier:
+                break
+
+            self._log_agent(f"=== Iteration {iteration}: Deep Dive ===", step_boundary=True)
+            logger.info("Iteration %d: deep dive on frontier=%s", iteration, frontier)
+            survivors: list[str] = []
+            for node_id in frontier:
+                if node_id not in self.tree.nodes:
+                    continue
+                if self.enable_deep_dive and self.use_controller_deep_dive and self.problem:
+                    survivors.extend(self._stage2_controller_deep_dive([node_id]))
+                else:
+                    survivors.append(node_id)
+            self.tree.save(self.save_dir / "tree.json")
+            self._update_live_view()
+
+            if not self.enable_expand:
+                break
+
+            # Build global expand seeds from all deep-dive survivors accumulated so far,
+            # not only from the current frontier.
+            expand_seeds: list[str] = []
+            for nid, node in self.tree.nodes.items():
+                if nid in {"root"} or nid in expanded_from:
+                    continue
+                if node is None or str(getattr(node, "status", "") or "") == "pruned":
+                    continue
+                if str(getattr(node, "stage", "") or "").strip().lower() != "localize":
+                    continue
+                level = self._get_level(getattr(node, "component", "") or "")
+                if level not in {"pod", "service"}:
+                    continue
+                verdict = str(getattr(node, "deep_dive_verdict", "") or "").strip().lower()
+                if verdict != "anomaly":
+                    continue
+                conf_avg = float(
+                    getattr(node, "deep_dive_confidence_avg", 0.0)
+                    or getattr(node, "deep_dive_confidence", 0.0)
+                    or 0.0
+                )
+                if conf_avg < 0.50:
+                    continue
+                expand_seeds.append(nid)
+
+            # Stable ordering: stronger confidence first, then recent time, then id.
+            def _seed_sort_key(nid: str):
+                n = self.tree.nodes.get(nid)
+                if n is None:
+                    return (0.0, "", nid)
+                c = float(
+                    getattr(n, "deep_dive_confidence_avg", 0.0)
+                    or getattr(n, "deep_dive_confidence", 0.0)
+                    or 0.0
+                )
+                t = str(getattr(n, "time", "") or "")
+                return (-c, t, nid)
+
+            expand_seeds = sorted(list(dict.fromkeys(expand_seeds)), key=_seed_sort_key)
+            for nid in expand_seeds:
+                expanded_from.add(nid)
+            self._save_seed_graph_snapshot(
+                iteration=iteration,
+                seed_ids=expand_seeds,
+            )
+
+            if not expand_seeds:
+                frontier = []
+                break
+
+            self._log_agent(f"=== Iteration {iteration}: Expand ===", step_boundary=True)
+            logger.info("Iteration %d: expand from seeds=%s", iteration, expand_seeds)
+            next_frontier: list[str] = []
+            # Seed-scoped expand: run expand for each seed independently.
+            for seed_id in expand_seeds:
+                seed_node = self.tree.nodes.get(seed_id)
+                logger.info(
+                    "Iteration %d: expand for seed=%s(%s)",
+                    iteration,
+                    seed_id,
+                    getattr(seed_node, "component", ""),
+                )
+                next_frontier.extend(self._stage3_controller_expand([seed_id], []))
+            self._save_causal_graph_snapshot(
+                iteration=iteration,
+                seed_ids=expand_seeds,
+                new_child_ids=list(dict.fromkeys(next_frontier)),
+            )
+            verifier_outcome = self._run_expand_need_verifier(
+                iteration=iteration,
+                seed_ids=expand_seeds,
+            )
+            if not bool(verifier_outcome.get("recommend_trace_expand", True)):
+                self._log_service(
+                    f"[Iterative] Stop after expand at iteration {iteration}: verifier mode="
+                    f"{verifier_outcome.get('mode')!r} (local signals stronger)."
+                )
+                frontier = []
+                break
+            if not next_frontier:
+                self._log_service(
+                    f"[Iterative] Stop at iteration {iteration}: expand produced 0 new candidates."
+                )
+                frontier = []
+                break
+            frontier = list(dict.fromkeys(next_frontier))
+            self.tree.save(self.save_dir / "tree.json")
+            self._update_live_view()
+
     def run(self, max_iterations: int = 20) -> dict:
         """Run the staged pipeline, return prediction dict."""
 
@@ -1354,14 +2076,37 @@ class StagedRCAPipeline:
         self._log_service(
             f"Stage 1 found {len(candidate_ids)} candidates:\n{candidate_summary}"
         )
+        if candidate_ids:
+            kept_lines: list[str] = []
+            for cid in candidate_ids:
+                n = self.tree.nodes.get(cid)
+                if not n:
+                    continue
+                kept_lines.append(
+                    f"- {cid}: component={n.component!r}, time={n.time!r}, "
+                    f"severity={float(getattr(n, 'severity', 0.0) or 0.0):.1f}, reason={n.reason!r}"
+                )
+            if kept_lines:
+                self._log_service(
+                    "[Localize] Final kept nodes after stage1 pruning:\n" + "\n".join(kept_lines)
+                )
         self._update_live_view()
 
-        # Precompute trace caller→callee edges between localized components
-        self._precompute_trace_edges(candidate_ids)
-        self._save_trace_anomaly_edges()
+        # Temporarily disabled: trace image-based localization/precompute path.
+        # self._precompute_trace_edges(candidate_ids)
+        # self._save_trace_anomaly_edges()
+        self._log_service("[Trace] Trace image localization/precompute is temporarily disabled.")
 
         # Sort candidates by severity (highest first) so we traverse worst anomalies first
         candidate_ids = self._sort_candidates_by_priority(candidate_ids)
+        # Existing-count map for expand stop rule:
+        # localized components start at 1, then increment whenever expand inspects/proposes them.
+        self._expand_component_existing_count = {}
+        for cid in candidate_ids:
+            node = self.tree.nodes.get(cid)
+            comp = (getattr(node, "component", "") or "").strip() if node else ""
+            if comp:
+                self._expand_component_existing_count[comp] = 1
 
         # ── Save tree (so far), build host containment groups, render ──
         tree_path = self.save_dir / "tree.json"
@@ -1372,46 +2117,22 @@ class StagedRCAPipeline:
         if self.render_localization_timeline and candidate_ids:
             self._render_localization_timeline(tree_path)
 
-        # ── Stage 3: single expand pass only from localization candidates ──
-        if self.enable_expand and candidate_ids:
-            logger.info("Stage 3: Single-pass Expand from localization candidates")
+        # ── Stage 2/3: iterative deep dive → expand loop ─────────────
+        if candidate_ids:
+            logger.info("Stage 2/3: Iterative Deep Dive → Expand")
             self._log_agent(
-                "=== Stage 3: Single-pass Expand from localization candidates ===",
+                "=== Stage 2/3: Iterative Deep Dive → Expand ===",
                 step_boundary=True,
             )
-            self._run_single_expand_pass(candidate_ids)
+            self._run_iterative_deep_dive_expand(candidate_ids, max_iterations=max_iterations)
             self.tree.save(tree_path)
             self._update_live_view()
-
-        # ── Stage 2: optional deep dive from leaf → root ──────────────
-        if self.enable_deep_dive:
-            ordered_ids = self._get_leaf_to_root_order()
-            if not ordered_ids:
-                ordered_ids = candidate_ids
-            logger.info(f"Stage 2: Deep Dive leaf→root ({len(ordered_ids)} nodes)")
-            self._log_agent(
-                f"=== Stage 2: Deep Dive leaf→root ({len(ordered_ids)} nodes) ===",
-                step_boundary=True,
-            )
-            self._run_leaf_to_root_deep_dive(ordered_ids)
         else:
-            logger.info("Stage 2: Deep Dive skipped (enable_deep_dive=False)")
+            logger.info("Stage 2/3 skipped: no localization candidates")
             self._log_agent(
-                "=== Stage 2: Deep Dive skipped (enable_deep_dive=False) ===",
+                "=== Stage 2/3 skipped: no localization candidates ===",
                 step_boundary=True,
             )
-
-        # ── Stage 4: global shortlist (Top-K) + focused deep dive ────
-        logger.info("Stage 4: Global Shortlist (Top-3) + Deep Dive")
-        self._log_agent(
-            "=== Stage 4: Global Shortlist (Top-3) + Focused Deep Dive ===",
-            step_boundary=True,
-        )
-        shortlist_ids = self.stage4_global_shortlist(top_k=3)
-        if shortlist_ids:
-            self.stage4_shortlist_deep_dive(shortlist_ids)
-            self.tree.save(tree_path)
-            self._update_live_view()
 
         # ── Stage 5: final global judge over the whole search tree ────
         logger.info("Stage 5: Global Judge")
@@ -1613,8 +2334,9 @@ class StagedRCAPipeline:
 
         # 2) Trace anomalous path graph → multiple root cause candidates
         try:
-            self._log_agent("[Localize] Scanning trace anomalous path graph")
-            if hasattr(self.actions, "get_trace_anomalous_path_graph"):
+            if not self.enable_trace_path_vision_localize:
+                self._log_agent("[Localize] Trace anomalous path vision critic disabled by config")
+            elif hasattr(self.actions, "get_trace_anomalous_path_graph"):
                 dataset_name = str((self.profile.name or "")).replace("openrca_", "").lower()
                 trace_min_edge_volume = 5 if dataset_name.startswith("market") else 20
                 path_result = self.actions.get_trace_anomalous_path_graph(
@@ -1788,6 +2510,50 @@ class StagedRCAPipeline:
             fallback_ids = self._stage1_localize_fallback()
             if fallback_ids:
                 candidate_ids.extend(fallback_ids)
+
+        # Keep only top severity localization candidates up to 1/3 of total possible components.
+        # This narrows stage1 fan-out while preserving the strongest hypotheses.
+        uniq_candidate_ids: list[str] = []
+        seen_ids: set[str] = set()
+        for cid in candidate_ids:
+            if cid and cid not in seen_ids:
+                seen_ids.add(cid)
+                uniq_candidate_ids.append(cid)
+        candidate_ids = uniq_candidate_ids
+
+        all_components = {
+            str(c).strip()
+            for c in (self.profile.possible_components or [])
+            if str(c).strip()
+        }
+        if not all_components:
+            all_components = {
+                str(c).strip()
+                for comps in (self.profile.component_levels or {}).values()
+                for c in (comps or [])
+                if str(c).strip()
+            }
+        total_component_candidates = len(all_components)
+        if total_component_candidates > 0 and candidate_ids:
+            keep_limit = max(1, (total_component_candidates + 2) // 3)  # ceil(n/3)
+            if len(candidate_ids) > keep_limit:
+                sorted_ids = self._sort_candidates_by_priority(candidate_ids)
+                keep_ids = set(sorted_ids[:keep_limit])
+                dropped = [cid for cid in candidate_ids if cid not in keep_ids]
+                for cid in dropped:
+                    node = self.tree.nodes.get(cid)
+                    if not node:
+                        continue
+                    node.status = "pruned"
+                    prev = (node.evidence or "").strip()
+                    note = "stage1_top_fraction_prune(keep_top_1_3_by_severity)"
+                    node.evidence = f"{prev} || {note}" if prev else note
+                candidate_ids = [cid for cid in sorted_ids if cid in keep_ids]
+                self._log_service(
+                    f"[Localize] Top-1/3 severity pruning applied: kept={len(candidate_ids)} "
+                    f"dropped={len(dropped)} total_components={total_component_candidates} "
+                    f"limit={keep_limit}"
+                )
 
         return candidate_ids
 
@@ -2323,6 +3089,113 @@ class StagedRCAPipeline:
                 merged.setdefault(component, []).extend(items or [])
         return merged
 
+    def _normalize_expand_component_hint(self, value: str | None) -> str:
+        comp = str(value or "").strip()
+        if not comp:
+            return ""
+        dataset = (self.profile.name or "").replace("openrca_", "")
+        if dataset.startswith("market") and comp.startswith("os_node-"):
+            comp = comp.replace("os_", "", 1)
+        return comp
+
+    def _resolve_expand_component_hint(
+        self,
+        raw_hint: str | None,
+        known_components: set[str],
+    ) -> str | None:
+        hint = self._normalize_expand_component_hint(raw_hint)
+        if not hint:
+            return None
+        if hint in known_components:
+            return hint
+
+        # Accept exact alias matches when the hint is a pod suffix like shippingservice-1.
+        for comp in known_components:
+            aliases = set(self._component_dependency_aliases(comp))
+            if hint in aliases:
+                return comp
+
+        text = f" {hint} "
+        for comp in sorted(known_components, key=len, reverse=True):
+            if f" {comp} " in text or comp == hint:
+                return comp
+        return None
+
+    def _build_deep_dive_target_relation_map(
+        self,
+        node: TreeNode,
+        known_components: set[str],
+    ) -> dict[str, list[dict]]:
+        rel_map: dict[str, list[dict]] = {}
+        for target in getattr(node, "deep_dive_edge_targets", []) or []:
+            if not isinstance(target, dict):
+                continue
+            resolved = self._resolve_expand_component_hint(
+                target.get("component"),
+                known_components,
+            )
+            if not resolved or resolved == node.component:
+                continue
+            rel_map.setdefault(resolved, []).append(
+                {
+                    "relation_family": "deep_dive_target",
+                    "relation_type": str(target.get("relation_hint") or "requested_edge_check").strip() or "requested_edge_check",
+                    "anomaly_type": None,
+                    "time": node.time,
+                    "label": "deep_dive_target",
+                    "metadata": {
+                        "why": str(target.get("why") or "").strip(),
+                        "requested_component": str(target.get("component") or "").strip(),
+                        "from_component": node.component,
+                    },
+                }
+            )
+        return rel_map
+
+    def _build_trace_expand_target_relation_map(
+        self,
+        node: TreeNode,
+        edge_targets: list[dict],
+        known_components: set[str],
+    ) -> dict[str, list[dict]]:
+        """Convert iterative trace-expand edge targets into relation metadata map."""
+        rel_map: dict[str, list[dict]] = {}
+        for target in edge_targets or []:
+            if not isinstance(target, dict):
+                continue
+            resolved = self._resolve_expand_component_hint(
+                target.get("component"),
+                known_components,
+            )
+            if not resolved or resolved == node.component:
+                continue
+            relation_hint = str(target.get("relation_hint") or "trace_expand").strip() or "trace_expand"
+            relation_type = relation_hint.replace(" ", "_")
+            try:
+                conf = float(target.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                conf = 0.0
+            rel_map.setdefault(resolved, []).append(
+                {
+                    "relation_family": "trace_expand_target",
+                    "relation_type": relation_type,
+                    "anomaly_type": str(target.get("anomaly_type") or "").strip() or None,
+                    "time": str(target.get("time") or node.time or "").strip() or None,
+                    "label": "trace_expand_target",
+                    "metadata": {
+                        "why": str(target.get("why") or "").strip(),
+                        "requested_component": str(target.get("component") or "").strip(),
+                        "from_component": node.component,
+                        "confidence": conf,
+                        "evidence_source": str(target.get("evidence_source") or "").strip(),
+                        "causal_direction": str(target.get("causal_direction") or "").strip().lower(),
+                        "component_level": str(target.get("component_level") or "").strip().lower(),
+                        "why_not_reverse": str(target.get("why_not_reverse") or "").strip(),
+                    },
+                }
+            )
+        return rel_map
+
     def _get_topology_relation_candidates(
         self,
         component: str,
@@ -2534,6 +3407,129 @@ class StagedRCAPipeline:
             self._log_service(
                 f"[Localize] Failed to build host containment groups: {e}"
             )
+
+    def _component_host_from_deployment(self, component: str) -> str | None:
+        comp = str(component or "").strip()
+        if not comp:
+            return None
+        try:
+            graphs = get_graphs(self._get_dependency_graph_dataset_key())
+            deploy_g = graphs.get("deployment_graph") or {}
+        except Exception:
+            return None
+        aliases = self._component_dependency_aliases(comp)
+        for alias in aliases:
+            if alias in deploy_g:
+                return alias
+        for host, members in deploy_g.items():
+            member_set = set(members or [])
+            for alias in aliases:
+                if alias in member_set:
+                    return str(host or "").strip() or None
+        return None
+
+    def _has_broad_colocated_pod_impact(
+        self,
+        node_component: str,
+        node_time: str | None,
+        *,
+        window_min: int = 10,
+        min_ratio: float = 0.5,
+    ) -> tuple[str, list[str], int, float]:
+        host = self._component_host_from_deployment(node_component)
+        if not host:
+            return "unknown", [], 0, 0.0
+        try:
+            graphs = get_graphs(self._get_dependency_graph_dataset_key())
+            deploy_g = graphs.get("deployment_graph") or {}
+        except Exception:
+            return "unknown", [], 0, 0.0
+
+        hosted_members = list(deploy_g.get(host) or [])
+        hosted_pods = [str(m).strip() for m in hosted_members if self._get_level(str(m).strip()) == "pod"]
+        hosted_pods = sorted({p for p in hosted_pods if p})
+        hosted_count = len(hosted_pods)
+        if hosted_count == 0:
+            return "unknown", [], 0, 0.0
+
+        alias_to_hosted: dict[str, str] = {}
+        for pod in hosted_pods:
+            for alias in self._component_dependency_aliases(pod):
+                alias_to_hosted.setdefault(alias, pod)
+
+        impacted_hosted: set[str] = set()
+        for n in self.tree.nodes.values():
+            if n is None or n.id == "root":
+                continue
+            if str(getattr(n, "status", "") or "") == "pruned":
+                continue
+            comp = str(getattr(n, "component", "") or "").strip()
+            if not comp or self._get_level(comp) != "pod":
+                continue
+            pod_host = self._component_host_from_deployment(comp)
+            if pod_host != host:
+                continue
+            verdict = str(getattr(n, "deep_dive_verdict", "") or "").strip().lower()
+            localized = bool(getattr(n, "localized_match", False))
+            if verdict != "anomaly" and not localized:
+                continue
+            if node_time and str(getattr(n, "time", "") or "").strip():
+                if not self._is_time_within_minutes(node_time, n.time, window_min=window_min):
+                    continue
+            matched_hosted = None
+            for alias in self._component_dependency_aliases(comp):
+                if alias in alias_to_hosted:
+                    matched_hosted = alias_to_hosted[alias]
+                    break
+            if matched_hosted:
+                impacted_hosted.add(matched_hosted)
+
+        impacted = sorted(impacted_hosted)
+        ratio = len(impacted) / float(hosted_count)
+        if ratio >= float(min_ratio):
+            return "supported", impacted, hosted_count, ratio
+        return "weak", impacted, hosted_count, ratio
+
+    def _pick_best_colocated_pod_candidate(
+        self,
+        node_component: str,
+        node_time: str | None,
+        *,
+        window_min: int = 10,
+    ) -> TreeNode | None:
+        host = self._component_host_from_deployment(node_component)
+        if not host:
+            return None
+        candidates: list[TreeNode] = []
+        for n in self.tree.nodes.values():
+            if n is None or n.id == "root":
+                continue
+            if str(getattr(n, "status", "") or "") == "pruned":
+                continue
+            comp = str(getattr(n, "component", "") or "").strip()
+            if not comp or self._get_level(comp) != "pod":
+                continue
+            if self._component_host_from_deployment(comp) != host:
+                continue
+            if node_time and str(getattr(n, "time", "") or "").strip():
+                if not self._is_time_within_minutes(node_time, n.time, window_min=window_min):
+                    continue
+            verdict = str(getattr(n, "deep_dive_verdict", "") or "").strip().lower()
+            if verdict != "anomaly":
+                continue
+            candidates.append(n)
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda x: (
+                float(getattr(x, "deep_dive_confidence_avg", 0.0) or 0.0),
+                float(getattr(x, "deep_dive_confidence", 0.0) or 0.0),
+                float(getattr(x, "confidence", 0.0) or 0.0),
+                float(getattr(x, "severity", 0.0) or 0.0),
+            ),
+            reverse=True,
+        )
+        return candidates[0]
 
     def _sort_candidates_by_priority(self, candidate_ids: list[str]) -> list[str]:
         """Sort candidate IDs by priority: highest severity first, then highest confidence."""
@@ -3095,6 +4091,9 @@ class StagedRCAPipeline:
         kpi = str(anomalous_kpi or "").strip().lower()
         if not comp:
             return comp
+        dataset = (self.profile.name or "").replace("openrca_", "")
+        if dataset.startswith("market") and comp.startswith("os_node-"):
+            comp = comp.replace("os_", "", 1)
         level = self._get_level(comp)
         graphs = get_graphs(self._get_dependency_graph_dataset_key())
         deploy_g = graphs.get("deployment_graph") or {}
@@ -3138,369 +4137,240 @@ class StagedRCAPipeline:
     # ── Stage 2: Deep Dive (controller-driven) ───────────────────────
 
     def _stage2_controller_deep_dive(self, candidate_ids: list[str]) -> list[str]:
-        """Deep dive: use actions to find which root cause class (reason) best matches
-        this component in the -5/+5 min window; may prune if not a real problem.
-        """
+        """Iterative controller-driven deep dive delegated to deep_dive_stage.py."""
         if not candidate_ids or not self.problem:
             return []
         cid = candidate_ids[0]
         node = self.tree.nodes[cid]
         level = self._get_level(node.component)
-        # Hint for the agent about component level (node / pod / service) and
-        # which KPIs are typically relevant for this level.
-        kpi_hint = ""
-        try:
-            # 1) Short core list (for quick glance) from kpis_by_type, when available.
-            core_kpis = self.profile.kpis_by_type.get(level) or []
-            # 2) Full non-dead KPI catalog from metric files (by metric type),
-            #    wired via kpi_catalog_*.json.
-            full_by_type = getattr(self.profile, "full_kpis_by_type", {}) or {}
-            dataset = (self.profile.name or "").replace("openrca_", "")
-            metric_types: list[str] = []
-            if dataset.startswith("telecom"):
-                # Telecom: os -> node metrics, docker -> container, db/redis -> service/middleware
-                if level == "node":
-                    metric_types = ["node"]
-                elif level == "pod":
-                    metric_types = ["container"]
-                elif level == "service":
-                    metric_types = ["service", "middleware"]
-            elif dataset.startswith("market"):
-                # Market: node ↔ metric_node, pod ↔ metric_container, service ↔ metric_service
-                if level == "node":
-                    metric_types = ["node"]
-                elif level == "pod":
-                    metric_types = ["container"]
-                elif level == "service":
-                    metric_types = ["service"]
-            elif dataset.startswith("bank"):
-                # Bank: node-level reasons; use both app + container KPIs.
-                metric_types = ["app", "container"]
-
-            full_kpis_for_level: list[str] = []
-            for t in metric_types:
-                full_kpis_for_level.extend(full_by_type.get(t, []))
-            # Deduplicate while preserving order a bit
-            seen = set()
-            full_kpis_for_level = [
-                k for k in full_kpis_for_level if not (k in seen or seen.add(k))
-            ]
-
-            if core_kpis or full_kpis_for_level:
-                parts: list[str] = []
-                if core_kpis:
-                    parts.append(
-                        f"Core KPIs for level '{level}': {', '.join(core_kpis)}."
-                    )
-                if full_kpis_for_level:
-                    parts.append(
-                        "From the telemetry tables, non-dead KPIs available for this "
-                        f"component type include (examples): {', '.join(full_kpis_for_level[:25])}. "
-                        "When you call execute(), use these KPI names as column filters or features "
-                        "(treat them as metric column names, not file paths)."
-                    )
-                kpi_hint = " ".join(parts)
-
-                # Log the KPI catalog actually used for this deep dive, so we can verify
-                # that the right KPIs are being exposed per component/level.
-                sample_core = ", ".join(core_kpis[:20]) if core_kpis else ""
-                sample_full = ", ".join(full_kpis_for_level[:40]) if full_kpis_for_level else ""
-                msg = (
-                    f"[Deep Dive] KPI catalog for component={node.component!r}, level={level!r}, "
-                    f"dataset={self.profile.name!r}. metric_types={metric_types}. "
-                    f"core_kpis_sample=[{sample_core}] full_kpis_sample=[{sample_full}]"
-                )
-                self._log_service(msg)
-        except Exception:
-            kpi_hint = ""
-        # Root cause classes (reasons) this component can have
-        possible_reasons = list(
-            self.profile.reasons_by_level.get(level, [])
-            or self.profile.possible_reasons
-            or []
-        )
-        if not possible_reasons and self.profile.possible_reasons:
-            possible_reasons = list(self.profile.possible_reasons)
-        time_window_neg = self._shift_time(node.time, -5)
-        time_window_pos = self._shift_time(node.time, 5)
-        window_str = f"[{time_window_neg or 't-5'} , {time_window_pos or 't+5'}]"
-
-        # Full query window (dataset-level) for comparing periodic vs episodic anomalies.
-        query_window_str = ""
-        try:
-            if self.time_range and "start" in self.time_range and "end" in self.time_range:
-                start_ts = float(self.time_range["start"])
-                end_ts = float(self.time_range["end"])
-                qs = datetime.utcfromtimestamp(start_ts).strftime("%Y-%m-%d %H:%M:%S")
-                qe = datetime.utcfromtimestamp(end_ts).strftime("%Y-%m-%d %H:%M:%S")
-                query_window_str = f"[{qs} , {qe}]"
-        except Exception:
-            query_window_str = ""
-
-        # Explicit list for the prompt (possible root cause classes)
-        possible_reasons_list = "\n".join(
-            f"- {r}" for r in possible_reasons
-        ) if possible_reasons else "(none — use low confidence and omit reason to prune)"
-
-        anomalous_kpi = getattr(node, "kpi", None) or ""
-        background = (
-            f"Target candidate: component={node.component!r}, "
-            f"fault time={node.time!r}. "
-        )
-        if anomalous_kpi:
-            background += (
-                f"The KPI that showed an anomaly in localization was: {anomalous_kpi!r}. "
-                f"Localization reason_hint={node.reason!r}. "
-            )
-        else:
-            background += f"Localization reason_hint={node.reason!r}. "
-        bg_parts = [
-            f"Namespace for all actions: {self.namespace!r}. ",
-            f"Time window for root cause: {window_str} (narrow down to one root cause class in this window). ",
-        ]
-        if query_window_str:
-            bg_parts.append(
-                f"Full query window for baseline/periodicity checks: {query_window_str}. "
-            )
-        bg_parts.append(f"Component level (node/pod/service): {level!r}. ")
-        bg_parts.append(f"{kpi_hint}")
-        background += "".join(bg_parts)
-        # Telecom-specific system knowledge for docker (pod-level) deep dives.
-        dataset_name = (self.profile.name or "").replace("openrca_", "")
-        if dataset_name.startswith("telecom") and level == "pod":
-            background += (
-                " In this Telecom system, components are layered as follows:\n"
-                "- os_001~022: OS nodes that host DB/services. Network delay/loss is mainly visible "
-                "via ICMP_ping, Sent_queue, Received_queue, and sometimes Disk_io_util / Memory_used_pct "
-                "when the node is under pressure.\n"
-                "- docker_001~004: first-tier service containers (frontend layer) running on os_021/022.\n"
-                "- docker_005~008: second-tier backend containers that talk to db_001~013 via JDBC.\n"
-                "- db_001~013: Oracle DB instances; Proc_Used_Pct, Sess_Connect, Proc_User_Used_Pct, "
-                "Session_pct, On_Off_State, and tnsping_result_time indicate DB connection/close faults.\n"
-                "- redis_*: middleware/cache (see metric_middleware).\n\n"
-                "Trace callType semantics for network diagnosis:\n"
-                "- CSF: caller-side framework/network-facing elapsed time.\n"
-                "- RemoteProcess: callee-side remote processing elapsed time.\n"
-                "- To estimate caller-callee network gap, do NOT pair by same cmdb_id only. "
-                "Use call-chain linkage first (pid/id parent-child relation with same traceId), "
-                "then compute network_gap = elapsedTime(CSF) - elapsedTime(RemoteProcess).\n\n"
-                "When you deep-dive a docker_* component, treat generic trace latency on that "
-                "docker as a **symptom** unless you can rule out CPU/DB causes:\n"
-                "- First, check container CPU metrics (e.g. container_cpu_used) on that docker for "
-                "sustained spikes or saturation.\n"
-                "- Second, check the corresponding db_*** KPIs (Proc_Used_Pct, Sess_Connect, "
-                "Proc_User_Used_Pct, Session_pct, On_Off_State, tnsping_result_time) for connection "
-                "limits, DB pressure, latency, or closes.\n"
-                "- Use ICMP_ping, Sent_queue, Received_queue, Memory_used_pct, and Disk_io_util on os_*** "
-                "plus trace error rate to decide whether the underlying "
-                "network is actually degraded.\n"
-                "Only choose 'network delay' as the root cause when there is no plausible CPU/DB "
-                "fault that can explain the latency."
-            )
-        elif dataset_name.startswith("market"):
-            background += (
-                " Market trace status semantics: in trace_span.csv, treat status_code values "
-                "`0`, `OK`, `Ok`, `200`, and `SUCCESS` as success (non-error). "
-                "When computing error_rate, do NOT count status `0` as an error. "
-                "Use a normalized boolean like `is_error = NOT(status IN {0, OK, Ok, 200, SUCCESS})`. "
-            )
-            if level == "pod":
-                background += (
-                    "Market pod metric naming note: in metric_container tables, cmdb_id may be "
-                    "'node-X.<pod_name>' while traces/logs typically use '<pod_name>'. "
-                    "When running execute() filters for this component, match both exact pod name and "
-                    "suffix-after-dot forms to avoid false 'no data' conclusions."
-                )
-        if possible_reasons:
-            background += (
-                f"Root cause classes you must choose from — pick exactly one that best matches "
-                f"(and if possible occurred earliest in the window): {', '.join(possible_reasons)}. "
-            )
-        background += (
-            "Use multiple KPIs and execute() as needed to determine which root cause class actually caused the problem; then conclude with one reason or low confidence to prune."
-        )
-        actions_desc = self.problem.get_available_actions() or {}
-        expand_actions_desc = {
-            name: doc for name, doc in actions_desc.items()
-            if name in ("execute", "submit")
-        }
-        action_list = "\n".join(
-            f"  - {name}: {doc[:200]}" for name, doc in expand_actions_desc.items()
-        )
-        system = _DEEP_DIVE_SYSTEM_TEMPLATE.format(
-            possible_reasons_list=possible_reasons_list,
-            background=background,
-            workflow=_DEEP_DIVE_WORKFLOW,
-            action_list=action_list or "(none)",
-        )
-        initial = (
-            f"Deep-dive this candidate: component={node.component!r}, "
-            f"time={node.time!r}, time window={window_str}. "
-        )
-        if anomalous_kpi:
-            initial += f"The KPI that showed anomaly in localization: {anomalous_kpi!r}. "
-        initial += (
-            f"Use actions (multiple KPIs, execute as needed) to narrow down to which root cause class from the list best matches. "
-            "You may prune by returning low confidence if no reason fits. "
-            "Respond with JSON only: thought, action, args; when concluding add confidence, reason (one from the list), explanation, other_suspect."
-        )
-        parser = ResponseParser()
-        verdict, messages = run_controller_stage(
-            stage_name="deep_dive",
-            system_prompt=system,
-            initial_user_message=initial,
+        outcome = run_deep_dive_controller(
             problem=self.problem,
+            actions=self.actions,
+            profile=self.profile,
+            namespace=self.namespace,
             llm_configs=self.configs,
-            parser=parser,
-            max_steps=15,
             sprint=self.sprint,
-            response_format="react_json",
-            component_level=level,
+            node=node,
+            level=level,
+            time_range=self.time_range,
+            normalize_time=self._normalize_outlier_time,
         )
-        conf = 0.0
-        explanation = ""
-        verdict_reason: str | None = None
-        other_suspect: list[str] = []
-        if verdict:
-            conf = float(verdict.get("confidence", 0))
-            explanation = str(verdict.get("explanation", ""))[:500]
-            # Optional: controller can refine earliest anomaly start time for this component.
-            # If a valid time is provided, normalize and update node.time so later stages
-            # (including expand) use this refined timestamp instead of the localization time.
-            new_time_raw = (verdict.get("time") or "").strip()
-            if new_time_raw:
-                normalized = self._normalize_outlier_time(new_time_raw)
-                if normalized:
-                    self._log_service(
-                        f"[Deep Dive] Updated time for component={node.component!r} "
-                        f"from localization time {node.time!r} to earliest anomaly "
-                        f"time {normalized!r} based on deep-dive analysis."
-                    )
-                    node.time = normalized
-
-            verdict_reason = verdict.get("reason")
-            if isinstance(verdict_reason, str):
-                verdict_reason = verdict_reason.strip()
-            else:
-                verdict_reason = None
-            other_suspect = list(verdict.get("other_suspect", []))
-            if other_suspect:
-                self._log_service(f"[Deep Dive] other_suspect: {other_suspect}")
-        # Validate: reason must be one of the allowed root cause classes
-        if verdict_reason and possible_reasons:
-            if verdict_reason not in possible_reasons:
-                # Try case-insensitive or exact substring match
-                normalized = None
-                for r in possible_reasons:
-                    if r.lower() == (verdict_reason or "").lower():
-                        normalized = r
-                        break
-                if normalized is not None:
-                    verdict_reason = normalized
-                    self._log_service(
-                        f"[Deep Dive] Normalized reason to allowed class: {verdict_reason!r}"
-                    )
-                else:
-                    self._log_service(
-                        f"[Deep Dive] Rejected reason (not in allowed list): {verdict_reason!r}. "
-                        f"Allowed: {possible_reasons}. Using localization reason_hint or omitting."
-                    )
-                    verdict_reason = None
-        elif verdict_reason and not possible_reasons:
-            verdict_reason = None
-        # reason_hint stays as-is; store allowed class as deep-dive class.
-        final_reason = verdict_reason or node.reason
-        reason_class = (verdict_reason or self._normalize_reason_to_class(node.reason)) or None
+        if outcome.verdict == "anomaly":
+            final_reason = outcome.reason or node.reason
+            reason_class = (outcome.reason or self._normalize_reason_to_class(node.reason)) or None
+        else:
+            final_reason = None
+            reason_class = None
         self._upsert_deep_dive_on_node(
             node,
             reason=final_reason,
             reason_class=reason_class,
-            confidence=conf,
-            explanation=explanation,
-            checked_reasons=(
-                [{"reason": final_reason, "confidence": round(float(conf), 4), "explanation": explanation[:280]}]
-                if final_reason else []
-            ),
-            time_str=node.time,
+            verdict=outcome.verdict,
+            confidence=outcome.confidence,
+            explanation=outcome.explanation,
+            checked_reasons=outcome.checked_reasons,
+            next_kpis=outcome.next_kpis,
+            edge_targets=outcome.edge_targets,
+            time_str=outcome.time or node.time,
         )
-        # Low confidence → do not pass to next stage.
-        if conf < 0.50:
+        dd_avg = float(getattr(node, "deep_dive_confidence_avg", 0.0) or 0.0)
+        dd_count = int(getattr(node, "deep_dive_confidence_count", 0) or 0)
+        self._log_service(
+            f"[Deep Dive] component={node.component!r} verdict={outcome.verdict!r} "
+            f"reason={outcome.reason!r} confidence={outcome.confidence:.2f} "
+            f"avg={dd_avg:.2f} count={dd_count} "
+            f"next_kpis={outcome.next_kpis[:8]!r} edge_targets={outcome.edge_targets[:4]!r}"
+        )
+        if outcome.verdict == "noise":
+            return []
+        if outcome.confidence < 0.30:
             return []
         return [cid]
+
+    def _resolve_namespace_base_path(self) -> Path | None:
+        base = getattr(getattr(self.actions, "static_app", None), "base_path", None)
+        ns = str(self.namespace or "").strip()
+        if base is None or not ns:
+            return None
+        ns_path = Path(base) / ns
+        if ns_path.exists():
+            return ns_path
+        return None
+
+    def _format_edge_tool_table_raw(self, table, *, label: str) -> str:
+        try:
+            import pandas as pd
+        except Exception:
+            pd = None
+        if pd is None or not isinstance(table, pd.DataFrame):
+            return f"[{label}]\nunavailable (non-DataFrame result)"
+        if table.empty:
+            return f"[{label}]\n(empty DataFrame)"
+        return f"[{label}]\n{table.to_string()}"
+
+    def _build_seed_trace_mesh_dependency_summary(
+        self,
+        node: TreeNode,
+        *,
+        window_min: int = 5,
+        top_k: int = 10,
+    ) -> str:
+        dataset_name = str(self.profile.name or "").lower()
+        if not dataset_name.startswith("openrca_market"):
+            return "(precompute unavailable for this dataset)"
+        base_path = self._resolve_namespace_base_path()
+        if base_path is None:
+            return "(precompute unavailable: namespace telemetry path not found)"
+
+        seed_time = str(getattr(node, "time", "") or "").strip()
+        if not seed_time:
+            return f"(precompute skipped: missing seed time for component={node.component!r})"
+        try:
+            dt = datetime.strptime(seed_time, "%Y-%m-%d %H:%M:%S")
+            start_time = (dt - timedelta(minutes=window_min)).strftime("%Y-%m-%d %H:%M:%S")
+            end_time = (dt + timedelta(minutes=window_min)).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return f"(precompute skipped: invalid seed time format={seed_time!r})"
+
+        from clients.tree_traversal.tools.trace_expand.market_cb1 import (
+            get_edge_error_rate_minutely,
+            get_edge_latency_minutely,
+        )
+
+        comp = str(node.component or "").strip()
+        # For node seeds, use pod granularity so mesh edges can align with colocated pod aliases.
+        level = self._get_level(comp)
+        if level in {"node", "pod"}:
+            granularity = "pod"
+        else:
+            granularity = "service"
+
+        sections: list[str] = [
+            f"Seed={comp!r}, seed_time={seed_time!r}, window=[{start_time} , {end_time}] (UTC), granularity={granularity}"
+        ]
+        calls = [
+            (
+                "latency/caller (trace+mesh)",
+                get_edge_latency_minutely,
+                {
+                    "base_path": str(base_path),
+                    "focus_component": comp,
+                    "direction": "caller",
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "source": "both",
+                    "granularity": granularity,
+                    "agg": ["p50", "p95"],
+                    "top_k": int(top_k),
+                },
+            ),
+            (
+                "latency/callee (trace+mesh)",
+                get_edge_latency_minutely,
+                {
+                    "base_path": str(base_path),
+                    "focus_component": comp,
+                    "direction": "callee",
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "source": "both",
+                    "granularity": granularity,
+                    "agg": ["p50", "p95"],
+                    "top_k": int(top_k),
+                },
+            ),
+            (
+                "error_rate/caller (trace+mesh)",
+                get_edge_error_rate_minutely,
+                {
+                    "base_path": str(base_path),
+                    "focus_component": comp,
+                    "direction": "caller",
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "source": "both",
+                    "granularity": granularity,
+                    "agg": ["mean", "max"],
+                    "top_k": int(top_k),
+                },
+            ),
+            (
+                "error_rate/callee (trace+mesh)",
+                get_edge_error_rate_minutely,
+                {
+                    "base_path": str(base_path),
+                    "focus_component": comp,
+                    "direction": "callee",
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "source": "both",
+                    "granularity": granularity,
+                    "agg": ["mean", "max"],
+                    "top_k": int(top_k),
+                },
+            ),
+        ]
+
+        for label, fn, kwargs in calls:
+            try:
+                table = fn(**kwargs)
+                sections.append(self._format_edge_tool_table_raw(table, label=label))
+            except Exception as e:
+                sections.append(f"[{label}]\nfailed ({e})")
+        return "\n".join(sections)
 
     def _stage3_controller_expand(
         self, hypothesis_ids: list[str], candidate_ids: list[str],
     ) -> list[str]:
-        """Expand: use controller with history to find related/root-cause components.
-        Uses graph.py topology (call/deployment/shared-resource) to suggest related
-        components in addition to controller verdict.
-        """
+        """Global trace-expand over multiple hypotheses: add multiple next components."""
+        self._last_expand_stop_due_existing_count = False
+        self._last_expand_stop_components = []
         if not hypothesis_ids or not self.problem:
             return []
-        best = self.tree.nodes[hypothesis_ids[0]]
-        trace_related, trace_relation_map = self._get_trace_relation_candidates(
-            best.component,
-            anchor_time=best.time,
-            window_min=5,
-        )
-        deploy_related, deploy_relation_map, deploy_groups = (
-            self._get_deployment_relation_candidates(best.component)
-        )
-        topology_related, topology_relation_map = self._get_topology_relation_candidates(
-            best.component
-        )
-        relation_meta_map = self._merge_relation_candidate_maps(
-            trace_relation_map,
-            deploy_relation_map,
-            topology_relation_map,
-        )
-        graph_related = sorted(relation_meta_map.keys())
-        logger.info(
-            "[Expand] %s @ %s | trace=%d deploy=%d topology=%d merged=%d",
-            best.component,
-            best.time,
-            len(trace_related),
-            len(deploy_related),
-            len(topology_related),
-            len(graph_related),
-        )
-        if trace_related:
-            logger.info("[Expand] %s trace candidates: %s", best.component, trace_related)
-        if deploy_related:
-            logger.info("[Expand] %s deployment candidates: %s", best.component, deploy_related)
-        if topology_related:
-            logger.info("[Expand] %s topology candidates: %s", best.component, topology_related)
-        if graph_related:
-            logger.info("[Expand] %s merged dependency candidates: %s", best.component, graph_related)
-        rel_map: dict[str, list[str]] = {}
-        for comp, items in relation_meta_map.items():
-            display_parts: list[str] = []
-            seen: set[str] = set()
-            for item in items:
-                relation_type = str(item.get("relation_type") or "").strip()
-                label = str(item.get("label") or "").strip()
-                piece = relation_type if not label else f"{relation_type}/{label}"
-                if piece and piece not in seen:
-                    seen.add(piece)
-                    display_parts.append(piece)
-            rel_map[comp] = display_parts
-        if graph_related:
-            # Basic list
+        hypothesis_nodes: list[TreeNode] = [
+            self.tree.nodes[hid] for hid in hypothesis_ids if hid in self.tree.nodes
+        ]
+        if not hypothesis_nodes:
+            return []
+
+        anchor = hypothesis_nodes[0]
+        anchor_level = self._get_level(getattr(anchor, "component", "") or "")
+        if anchor_level not in {"pod", "service"}:
             self._log_service(
-                f"[Expand] Relation-based expand candidates for {best.component!r}: "
-                f"{graph_related[:15]}{'...' if len(graph_related) > 15 else ''}"
+                f"[Expand] Skip trace-expand for non pod/service seed: component={anchor.component!r}, level={anchor_level!r}"
             )
-            # Relation detail per candidate (how it is linked to the hypothesis)
-            annotated = []
-            for comp in graph_related:
-                rels = rel_map.get(comp) or []
-                if rels:
-                    annotated.append(f"{comp} [{' / '.join(rels)}]")
-                else:
-                    annotated.append(f"{comp} [unknown]")
-            self._log_service(
-                "[Expand] Relation types per candidate: " + "; ".join(annotated)
+            return []
+        hypothesis_by_component: dict[str, tuple[str, TreeNode]] = {
+            str(n.component or "").strip(): (hid, n)
+            for hid, n in zip(hypothesis_ids, hypothesis_nodes)
+            if str(n.component or "").strip()
+        }
+
+        merged_deploy_map: dict[str, list[dict]] = {}
+        merged_topology_map: dict[str, list[dict]] = {}
+        known_components = set(self.profile.possible_components or [])
+
+        for node in hypothesis_nodes:
+            _dr, deploy_map, _dg = self._get_deployment_relation_candidates(node.component)
+            _tr, topology_map = self._get_topology_relation_candidates(node.component)
+            merged_deploy_map = self._merge_relation_candidate_maps(
+                merged_deploy_map,
+                deploy_map,
             )
+            merged_topology_map = self._merge_relation_candidate_maps(
+                merged_topology_map,
+                topology_map,
+            )
+            known_components |= set(deploy_map.keys()) | set(topology_map.keys())
+
+        merged_deep_dive_map: dict[str, list[dict]] = {}
+        for node in hypothesis_nodes:
+            deep_map = self._build_deep_dive_target_relation_map(node, known_components)
+            merged_deep_dive_map = self._merge_relation_candidate_maps(
+                merged_deep_dive_map,
+                deep_map,
+            )
+
         # Full query window (dataset-level) for comparing periodic vs episodic anomalies.
         query_window_str = ""
         try:
@@ -3513,60 +4383,30 @@ class StagedRCAPipeline:
         except Exception:
             query_window_str = ""
 
-        actions_desc = self.problem.get_available_actions() or {}
-        action_list = "\n".join(
-            f"  - {name}: {doc[:200]}" for name, doc in actions_desc.items()
+        trace_expand_relation_map: dict[str, list[dict]] = {}
+        trace_expand_edge_targets: list[dict] = []
+        seed_relation_map = self._merge_relation_candidate_maps(
+            merged_deploy_map,
+            merged_topology_map,
+            merged_deep_dive_map,
         )
-        if not graph_related:
-            logger.info(
-                "[Expand] %s produced 0 dependency candidates before anomaly filtering",
-                best.component,
+        seed_candidates = sorted(seed_relation_map.keys())
+        existing_children_under_parent = {
+            (
+                (n.parent_id or "").strip(),
+                (n.component or "").strip(),
+            )
+            for n in self.tree.nodes.values()
+            if (n.component or "").strip()
+        }
+        hypothesis_parent_ids = [
+            hid for hid in hypothesis_ids if hid in self.tree.nodes
+        ]
+        if not seed_candidates:
+            self._log_service(
+                f"[Expand] hypotheses={[n.component for n in hypothesis_nodes]!r} produced 0 relation candidates for trace-expand."
             )
             return []
-
-        # Split relation-based candidates into two passes:
-        #   1) Trace anomaly edges (caller/callee) → first expand pass
-        #      This includes:
-        #        - direct trace_call neighbours of the current hypothesis, and
-        #        - any deployment-contained components that appear in global trace anomaly edges.
-        #   2) Topology/deployment/shared-resource dependencies from graph.py → second pass
-        trace_first: set[str] = set()
-        for comp, infos in (relation_meta_map or {}).items():
-            if any(
-                (info.get("relation_family") or "").strip() == "trace_call"
-                and self._is_time_within_minutes(best.time, str(info.get("time") or "").strip(), 5)
-                for info in infos or []
-            ):
-                trace_first.add(comp)
-
-        grouped_trace: dict[str, list[str]] = {}
-        grouped_graph: dict[str, list[str]] = {}
-        for comp in graph_related:
-            group_key = self._get_expand_group_key(comp)
-            if comp in trace_first:
-                grouped_trace.setdefault(group_key, []).append(comp)
-            else:
-                grouped_graph.setdefault(group_key, []).append(comp)
-
-        if grouped_trace or grouped_graph:
-            parts: list[str] = []
-            if grouped_trace:
-                parts.append(
-                    "trace_edges="
-                    + ", ".join(
-                        f"{self._format_expand_group_label(group)}={len(comps)}"
-                        for group, comps in grouped_trace.items()
-                    )
-                )
-            if grouped_graph:
-                parts.append(
-                    "graph_dep="
-                    + ", ".join(
-                        f"{self._format_expand_group_label(group)}={len(comps)}"
-                        for group, comps in grouped_graph.items()
-                    )
-                )
-            self._log_service("[Expand] Grouped candidate batches: " + " ; ".join(parts))
 
         class _LockedProblemProxy:
             def __init__(self, problem, lock):
@@ -3581,501 +4421,303 @@ class StagedRCAPipeline:
                     return self._problem.perform_action(action_name, *args, **kwargs)
 
         locked_problem = _LockedProblemProxy(self.problem, self._controller_action_lock)
-
-        def _run_expand_group(group_key: str, group_candidates: list[str]) -> list[dict]:
-            group_label = self._format_expand_group_label(group_key)
-            cached_components: list[dict] = []
-            fresh_candidates: list[str] = []
-            for comp in group_candidates:
-                cached = self._get_expand_cached_verdict(comp, best.time)
-                if cached is None:
-                    fresh_candidates.append(comp)
-                    continue
-                cached["_reused_from_cache"] = True
-                cached_components.append(cached)
-                self._log_service(
-                    f"[Expand] Reusing cached verdict for {comp!r} in {group_label} batch "
-                    f"around time {best.time!r}: has_anomaly={cached.get('has_anomaly')!r}, "
-                    f"value_is_problematic={cached.get('value_is_problematic')!r}"
-                )
-            if not fresh_candidates:
-                self._log_service(
-                    f"[Expand] Skipped {group_label} batch LLM call: all {len(group_candidates)} "
-                    "candidates already inspected in a nearby window."
-                )
-                return cached_components
-            background = (
-                f"Current hypothesis: component={best.component!r}, reason={best.reason!r}, time={best.time!r}. "
-                f"Namespace: {self.namespace!r}. "
-                + (f"Full query window for baseline/periodicity checks: {query_window_str}. " if query_window_str else "")
-            )
-            annotated_bg: list[str] = []
-            for comp in fresh_candidates:
-                rels = rel_map.get(comp) or []
-                if rels:
-                    annotated_bg.append(f"{comp} ({'/'.join(rels)})")
-                else:
-                    annotated_bg.append(comp)
-            background += (
-                f"This expand batch contains ONLY {group_label} candidates. "
-                "The following components are relation-based candidates for expand. "
-                "Trace-based caller/callee edges are precomputed from anomalous edge behavior "
-                "(error rate, network gap, or remote process time) in the query window, while deployment "
-                "relations come from the deployment graph. Relation types in parentheses show "
-                "how each candidate is linked to the current hypothesis: "
-                f"{', '.join(annotated_bg)}. "
-            )
-            group_kpis = self._get_expand_group_kpis(group_key)
-            if group_kpis:
-                background += (
-                    f"For this {group_label} batch, inspect these {group_label}-related KPIs as relevant "
-                    f"before concluding: {', '.join(group_kpis)}. "
-                    "Do not stop after checking only one representative KPI if multiple KPIs are available "
-                    "for this component family. "
-                )
-            if (self.profile.name or "").replace("openrca_", "").startswith("telecom"):
-                if group_key == "docker":
-                    background += (
-                        "Telecom Docker KPI semantics: judge `container_cpu_used` by absolute level, not only by relative lift. "
-                        "A rise from near 0 to around 20 can be anomalous versus baseline but is usually NOT operationally problematic by itself. "
-                        "Use `value_is_problematic=true` only when the absolute CPU level is clearly high/sustained or when additional evidence shows real CPU stress. "
-                        "Likewise, modest memory increases should not be treated as problematic unless the absolute level or sustained rise is meaningfully high. "
-                    )
-                elif group_key == "db":
-                    background += (
-                        "Telecom DB KPI semantics: for `Session_pct`, `Sess_Connect`, `Proc_Used_Pct`, `Proc_User_Used_Pct`, and `tnsping_result_time`, "
-                        "judge `value_is_problematic` by true saturation, pressure, or latency level, not only by peer gap. "
-                        "A brief or moderate rise that stays away from operational limits should usually be false. "
-                    )
-                elif group_key == "os":
-                    background += (
-                        "Telecom OS KPI semantics: for `ICMP_ping`, `Sent_queue`, `Received_queue`, `Disk_io_util`, and `Memory_used_pct`, "
-                        "judge `value_is_problematic` by substantial sustained latency, backlog, or pressure. Tiny or brief changes should usually be false. "
-                    )
-            if (self.profile.name or "").replace("openrca_", "").startswith("market"):
-                background += (
-                    "Market trace status semantics: in trace_span.csv, treat status_code values "
-                    "`0`, `OK`, `Ok`, `200`, and `SUCCESS` as success (non-error). "
-                    "When computing error_rate, do NOT count status `0` as an error. "
-                    "Use a normalized boolean like `is_error = NOT(status IN {0, OK, Ok, 200, SUCCESS})`. "
-                )
-                if group_label == "pod":
-                    background += (
-                        "Market pod naming note: metric_container `cmdb_id` can be `node-X.<pod_name>` while traces/logs use `<pod_name>`. "
-                        "In execute() analyses, filter pods using both exact and suffix-after-dot matches. "
-                    )
-            background += (
-                "During expand you should treat only this batch as the candidate set and, using execute() only, "
-                "inspect each candidate's own KPIs in the t-5min to t+5min window around the hypothesis time "
-                "to see which ones show strong anomalies worth advancing to later stages, "
-                "and which ones only show propagated effects or weak evidence. Do not decide the final root cause here; "
-                "return only the filtered anomaly candidates from this batch."
-            )
-
-            system = _EXPAND_SYSTEM_TEMPLATE.format(
-                background=background,
-                workflow=_EXPAND_WORKFLOW,
-                action_list=action_list or "(none)",
-            )
-            initial = (
-                f"Expand batch [{group_label}] from hypothesis: component={best.component!r}, "
-                f"reason={best.reason!r}, time={best.time!r}. "
-                f"Candidates in this batch: {fresh_candidates}. "
-                "Follow the workflow. Respond with JSON only: thought, action, args; when concluding use "
-                "action=submit with a 'components' list where each entry includes component, time, has_anomaly, confidence, "
-                "anomalous_kpi, anomaly_value, value_is_problematic, value_judgment, and clues."
-            )
+        tree_summary = self._summarize_tree_for_expand(hypothesis_parent_ids[0])
+        hypothesis_summary = (
+            f"anchor_component={anchor.component!r}, anchor_time={anchor.time!r}, anchor_reason={anchor.reason!r}, "
+            f"anchor_deep_dive_verdict={getattr(anchor, 'deep_dive_verdict', None)!r}, "
+            f"anchor_deep_dive_reason={getattr(anchor, 'deep_dive_reason_class', None)!r}, "
+            f"query_window={query_window_str or '(unknown)'}"
+        )
+        seed_time_str = str(getattr(anchor, "time", "") or "").strip()
+        seed_window_text = ""
+        if seed_time_str:
+            try:
+                dt = datetime.strptime(seed_time_str, "%Y-%m-%d %H:%M:%S")
+                ws = (dt - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+                we = (dt + timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+                seed_window_text = f"[{ws} , {we}]"
+            except Exception:
+                seed_window_text = ""
+        precomputed_dependency_summary = self._build_seed_trace_mesh_dependency_summary(
+            anchor,
+            window_min=5,
+            top_k=10,
+        )
+        full_lines = [
+            str(x).rstrip()
+            for x in str(precomputed_dependency_summary or "").splitlines()
+            if str(x).strip()
+        ]
+        if full_lines:
             self._log_service(
-                f"[Expand] Starting {group_label} batch with candidates: {fresh_candidates}"
+                "[Trace Expand] Precomputed dependency summary (full):\n"
+                + "\n".join(full_lines)
             )
-            parser = ResponseParser()
-            verdict, _messages = run_controller_stage(
-                stage_name="expand",
-                system_prompt=system,
-                initial_user_message=initial,
+        target_hypotheses = []
+        for hid in hypothesis_parent_ids:
+            n = self.tree.nodes.get(hid)
+            if n is None:
+                continue
+            target_hypotheses.append(
+                {
+                    "node_id": hid,
+                    "component": n.component,
+                    "time": n.time,
+                    "level": self._get_level(n.component),
+                    "localized_reason": n.reason,
+                    "deep_dive_verdict": getattr(n, "deep_dive_verdict", None),
+                    "deep_dive_reason": getattr(n, "deep_dive_reason_class", None),
+                    "deep_dive_confidence": float(
+                        getattr(n, "deep_dive_confidence_avg", 0.0)
+                        or getattr(n, "deep_dive_confidence", 0.0)
+                        or 0.0
+                    ),
+                    "deep_dive_next_kpis": list(getattr(n, "deep_dive_next_kpis", []) or [])[:12],
+                }
+            )
+        seed_lines: list[str] = []
+        for comp in seed_candidates[:80]:
+            rel_infos = seed_relation_map.get(comp) or []
+            families = sorted(
+                {
+                    str(info.get("relation_family") or "").strip()
+                    for info in rel_infos
+                    if str(info.get("relation_family") or "").strip()
+                }
+            )
+            rel_types = sorted(
+                {
+                    str(info.get("relation_type") or "").strip()
+                    for info in rel_infos
+                    if str(info.get("relation_type") or "").strip()
+                }
+            )
+            seed_lines.append(
+                f"- {comp}: families={families or ['unknown']}, relation_types={rel_types or ['unknown']}"
+            )
+        try:
+            trace_expand_outcome = run_trace_expand_controller(
                 problem=locked_problem,
                 llm_configs=self.configs,
-                parser=parser,
-                max_steps=15,
                 sprint=self.sprint,
-                response_format="react_json",
-            )
-            components = verdict.get("components") if verdict else None
-            if not isinstance(components, list):
-                components = []
-            allowed = set(fresh_candidates)
-            components = [
-                entry for entry in components
-                if isinstance(entry, dict)
-                and (entry.get("component") or "").strip() in allowed
-            ]
-            for entry in components:
-                self._store_expand_cached_verdict(entry, best.time)
-            self._log_service(
-                f"[Expand] Finished {group_label} batch: {len(components)} new component verdict(s), "
-                f"{len(cached_components)} reused from cache"
-            )
-            return cached_components + components
-
-        def _run_grouped_batches(grouped_related: dict[str, list[str]]) -> list[dict]:
-            """Run one or more expand batches for a grouped candidate map."""
-            if not grouped_related:
-                return []
-            out: list[dict] = []
-            if len(grouped_related) == 1:
-                group_key, group_candidates = next(iter(grouped_related.items()))
-                out.extend(_run_expand_group(group_key, group_candidates))
-            else:
-                with ThreadPoolExecutor(max_workers=min(3, len(grouped_related))) as executor:
-                    futures = {
-                        executor.submit(_run_expand_group, group_key, group_candidates): group_key
-                        for group_key, group_candidates in grouped_related.items()
-                    }
-                    for future in as_completed(futures):
-                        group_key = futures[future]
-                        try:
-                            out.extend(future.result())
-                        except Exception as e:
-                            self._log_service(
-                                f"[Expand] {self._format_expand_group_label(group_key)} batch failed: {e}"
-                            )
-            return out
-
-        new_candidate_ids: list[str] = []
-        components_info: list[dict] = []
-        skipped_not_anomaly = 0
-        skipped_not_problematic = 0
-        pruned_low_conf = 0
-        skipped_duplicate = 0
-        skipped_self = 0
-
-        # 1) First pass: components connected via anomalous trace edges.
-        #    These skip the controller/execute loop and are treated as confirmed
-        #    expand candidates based solely on trace anomaly evidence. We also
-        #    attach detailed latency/error/volume change info so that later
-        #    stages (including global judge) can reason over concrete metric
-        #    deltas instead of a generic "anomaly" tag.
-        for comp in sorted(trace_first):
-            rel_infos = relation_meta_map.get(comp) or []
-            trace_infos = [
-                info
-                for info in rel_infos
-                if (info.get("relation_family") or "").strip() == "trace_call"
-            ]
-            # If this component was promoted to trace_first only via deployment
-            # membership (no local trace_call relation_infos), fall back to the
-            # global _trace_anomaly_edges cache to synthesize a trace entry.
-            if not trace_infos and getattr(self, "_trace_anomaly_edges", None):
-                synthetic: list[dict] = []
-                for edge in self._trace_anomaly_edges:
-                    caller = str(edge.get("caller") or "").strip()
-                    callee = str(edge.get("callee") or "").strip()
-                    edge_time = str(edge.get("time") or "").strip()
-                    if not self._is_time_within_minutes(best.time, edge_time, 5):
-                        continue
-                    if comp not in (caller, callee):
-                        continue
-                    anomaly_type = str(edge.get("anomaly_type") or "mixed").strip() or "mixed"
-                    time_str = edge_time
-                    synthetic.append(
-                        {
-                            "relation_family": "trace_call",
-                            "relation_type": "call_downstream" if comp == caller else "call_upstream",
-                            "anomaly_type": anomaly_type,
-                            "time": time_str,
-                            "end_time": str(edge.get("end_time") or "").strip(),
-                            "duration_minutes": edge.get("duration_minutes"),
-                            "label": self._format_trace_relation_badge(anomaly_type, time_str),
-                            "metadata": {
-                                "edge_id": edge.get("edge_id"),
-                                "caller": caller,
-                                "callee": callee,
-                                **(edge.get("metadata") or {}),
-                            },
-                        }
-                    )
-                trace_infos = synthetic
-            if not trace_infos:
-                continue
-            # Choose nearest anomaly time among trace edges for this component.
-            trace_infos_sorted = sorted(
-                trace_infos,
-                key=lambda x: (
-                    0 if self._is_time_within_minutes(best.time, str(x.get("time") or "").strip(), 5) else 1,
-                    str(x.get("time") or ""),
-                    str(x.get("anomaly_type") or ""),
+                actions=self.actions,
+                profile=self.profile,
+                namespace=self.namespace,
+                dataset_name=self.profile.name or "",
+                hypothesis_summary=hypothesis_summary,
+                target_hypotheses=target_hypotheses,
+                tree_summary=tree_summary,
+                system_structure_summary="\n".join(seed_lines),
+                candidate_seed_summary=", ".join(seed_candidates[:80]),
+                precomputed_dependency_summary=precomputed_dependency_summary,
+                initial_user_message=(
+                    f"Target hypotheses={ [x.get('component') for x in target_hypotheses] !r}. "
+                    f"Seed-centered query window={seed_window_text or '(unknown; derive from seed time)'} (about ±5 minutes). "
+                    "Use the precomputed trace/mesh caller-callee dependency snapshot first, "
+                    "then iterate with tools if needed, and submit related anomalous child components for deep-dive as edge_targets."
                 ),
+                parent_components=[
+                    str(self.tree.nodes[hid].component or "").strip()
+                    for hid in hypothesis_parent_ids
+                    if hid in self.tree.nodes and str(self.tree.nodes[hid].component or "").strip()
+                ],
             )
-            primary = trace_infos_sorted[0]
-            t_str = str(primary.get("time") or "").strip() or best.time
-            anomaly_type = str(primary.get("anomaly_type") or "mixed").strip() or "mixed"
-            meta = primary.get("metadata") or {}
-            event = meta.get("event") or {}
-            error_info = meta.get("error_info") or {}
-            gap_info = meta.get("gap_info") or {}
-            remote_info = meta.get("remote_info") or {}
-            detail_parts: list[str] = []
-            if error_info:
-                try:
-                    err_base = error_info.get("baseline")
-                    err_peak = error_info.get("peak")
-                    err_thr = error_info.get("threshold")
-                    detail_parts.append(f"error_rate {err_base}→{err_peak} (thr={err_thr})")
-                except Exception:
-                    pass
-            if gap_info:
-                try:
-                    gap_base = gap_info.get("baseline")
-                    gap_peak = gap_info.get("peak")
-                    gap_thr = gap_info.get("threshold")
-                    detail_parts.append(f"network_gap {gap_base}→{gap_peak} (thr={gap_thr})")
-                except Exception:
-                    pass
-            if remote_info:
-                try:
-                    rem_base = remote_info.get("baseline")
-                    rem_peak = remote_info.get("peak")
-                    rem_thr = remote_info.get("threshold")
-                    detail_parts.append(f"remote_process_time {rem_base}→{rem_peak} (thr={rem_thr})")
-                except Exception:
-                    pass
-            if event:
-                detail_parts.append(
-                    f"episode {event.get('onset')}~{event.get('end_time')} ({event.get('duration_minutes')}m)"
-                )
-            detail_str = "; ".join(detail_parts)
-            kpi_name = {
-                "error_rate": "error_rate",
-                "network_gap": "network_gap",
-                "remote_process_time": "remote_process_time",
-            }.get(anomaly_type, f"trace_{anomaly_type}")
-            components_info.append(
-                {
-                    "component": comp,
-                    "time": t_str,
-                    "has_anomaly": True,
-                    "_auto_trace_confirmed": True,
-                    "anomalous_kpi": kpi_name,
-                    "anomaly_value": detail_str,
-                    "value_is_problematic": True,
-                    "value_judgment": "precomputed trace edge anomaly",
-                    "confidence": 1.0,
-                    "clues": (
-                        f"trace_edge:{anomaly_type}@{t_str} | {detail_str}"
-                        if detail_str
-                        else f"trace_edge:{anomaly_type}@{t_str}"
-                    ),
-                }
-            )
+            trace_expand_edge_targets = [
+                x for x in (trace_expand_outcome.edge_targets or []) if isinstance(x, dict)
+            ]
+        except Exception as e:
+            self._log_service(f"[Trace Expand] failed: {e}")
+            return []
+
+        trace_expand_relation_map = self._build_trace_expand_target_relation_map(
+            anchor,
+            trace_expand_edge_targets,
+            known_components,
+        )
+        if trace_expand_relation_map:
             self._log_service(
-                f"[Expand] Auto-confirmed trace-edge dependency for {comp!r} at {t_str!r} "
-                f"(anomaly_type={anomaly_type!r}) without controller/execute."
+                f"[Trace Expand] Added {len(trace_expand_relation_map)} verified edge target(s): "
+                + ", ".join(sorted(trace_expand_relation_map.keys())[:20])
             )
+        if not trace_expand_edge_targets:
+            self._log_service(
+                f"[Expand] No trace-expand edge targets for hypotheses="
+                f"{[n.component for n in hypothesis_nodes]!r}."
+            )
+            return []
 
-        # 2) Second pass: remaining topology/deployment/shared-resource dependencies
-        #    go through the controller/execute-based expand workflow.
-        components_info.extend(_run_grouped_batches(grouped_graph))
-
-        # Precompute localization candidates (component, time) to preserve low-confidence
-        # dependencies that were already surfaced in Stage 1 (within ±5 minutes).
-        localize_nodes = [
-            n for n in self.tree.nodes.values()
-            if n.stage == "localize" and (n.time or "").strip()
-        ]
-
-        def _get_localized_match(
-            component: str,
-            time_str: str | None,
-            window_min: float = 5.0,
-        ):
-            if not component or not time_str:
-                return None
+        normalized_targets: list[dict] = []
+        for target in trace_expand_edge_targets:
+            resolved = self._resolve_expand_component_hint(target.get("component"), known_components)
+            from_hyp = str(target.get("from_hypothesis_component") or "").strip()
+            if not resolved:
+                continue
+            resolved_level = self._get_level(resolved)
+            if resolved_level not in {"pod", "service"}:
+                continue
             try:
-                t_new = datetime.strptime(str(time_str).strip(), "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                return None
-            best_match = None
-            best_key = None
-            for ln in localize_nodes:
-                if ln.component != component or not (ln.time or "").strip():
-                    continue
-                try:
-                    t_loc = datetime.strptime(str(ln.time).strip(), "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    continue
-                delta_sec = abs((t_new - t_loc).total_seconds())
-                if delta_sec > window_min * 60.0:
-                    continue
-                match_key = (-float(getattr(ln, "severity", 0.0) or 0.0), delta_sec)
-                if best_key is None or match_key < best_key:
-                    best_key = match_key
-                    best_match = ln
-            return best_match
-
-        to_add: list[tuple[str, str, str | None, float, str, object | None]] = []
-        existing_children_under_parent = {
-            (
-                (n.parent_id or "").strip(),
-                (n.component or "").strip(),
-            )
-            for n in self.tree.nodes.values()
-            if (n.component or "").strip()
-        }
-
-        # Controller returns per-component anomaly summaries; only components with
-        # both has_anomaly == true and value_is_problematic == true will be turned
-        # into new expand candidates.
-        for entry in components_info:
-            if not isinstance(entry, dict):
-                continue
-            comp = (entry.get("component") or "").strip()
-            if not comp or comp == best.component:
-                skipped_self += 1
-                continue
-            if (hypothesis_ids[0], comp) in existing_children_under_parent:
-                # Avoid creating the exact same child twice under the same parent,
-                # but allow the same component to appear under other parents so the
-                # expand tree can show multiple plausible causal paths.
-                skipped_duplicate += 1
-                continue
-            has_anom = entry.get(
-                "has_anomaly",
-                True if entry.get("_auto_trace_confirmed") else False,
-            )
-            if isinstance(has_anom, str):
-                has_anom = has_anom.strip().lower() in {"true", "yes", "1"}
-            if not has_anom:
-                skipped_not_anomaly += 1
-                continue
-            t_str = entry.get("time") or best.time
-            clues = entry.get("clues") or ""
-            anomalous_kpi = (entry.get("anomalous_kpi") or "").strip()
-            anomaly_value = (entry.get("anomaly_value") or "").strip()
-            value_is_problematic = entry.get("value_is_problematic")
-            if isinstance(value_is_problematic, str):
-                value_is_problematic = value_is_problematic.strip().lower() in {
-                    "true", "yes", "1", "problematic"
+                conf = float(target.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                conf = 0.0
+            time_hint = str(target.get("time") or "").strip()
+            if not time_hint:
+                if from_hyp and from_hyp in hypothesis_by_component:
+                    time_hint = str(hypothesis_by_component[from_hyp][1].time or "").strip()
+                if not time_hint:
+                    time_hint = str(anchor.time or "").strip()
+            normalized_targets.append(
+                {
+                    "component": resolved,
+                    "confidence": conf,
+                    "time": time_hint,
+                    "relation_hint": str(target.get("relation_hint") or "trace_expand").strip() or "trace_expand",
+                    "why": str(target.get("why") or "").strip(),
+                    "evidence_source": str(target.get("evidence_source") or "").strip(),
+                    "from_hypothesis_component": from_hyp,
+                    "causal_direction": str(target.get("causal_direction") or "").strip().lower(),
+                    "component_level": resolved_level,
+                    "why_not_reverse": str(target.get("why_not_reverse") or "").strip(),
                 }
-            if value_is_problematic is not True:
-                self._log_service(
-                    f"[Expand] Skipped dependency {comp!r} at {t_str!r}: "
-                    f"has_anomaly={has_anom!r}, "
-                    f"value_is_problematic={value_is_problematic!r}"
-                )
-                skipped_not_problematic += 1
+            )
+        if not normalized_targets:
+            self._log_service(
+                f"[Expand] Trace-expand targets were empty or unresolved for hypotheses="
+                f"{[n.component for n in hypothesis_nodes]!r}."
+            )
+            return []
+
+        by_component: dict[str, dict] = {}
+        for item in normalized_targets:
+            comp = str(item.get("component") or "").strip()
+            if not comp:
                 continue
-            value_judgment = (entry.get("value_judgment") or "").strip()
-            detail_parts: list[str] = []
-            if anomalous_kpi:
-                detail_parts.append(f"kpi={anomalous_kpi}")
-            if anomaly_value:
-                detail_parts.append(f"value={anomaly_value}")
-            if value_is_problematic is not None:
-                detail_parts.append(f"value_is_problematic={value_is_problematic}")
-            if value_judgment:
-                detail_parts.append(f"value_judgment={value_judgment}")
-            if clues:
-                detail_parts.append(f"clues={clues}")
-            evidence = " | ".join(detail_parts) if detail_parts else clues
-            rel_infos = relation_meta_map.get(comp) or []
-            rel_str = self._relation_label_from_infos(rel_infos)
-            # Optional per-component anomaly confidence from controller (0.0–1.0)
-            comp_conf = entry.get("confidence")
+            prev = by_component.get(comp)
+            if prev is None or float(item.get("confidence", 0.0) or 0.0) > float(
+                prev.get("confidence", 0.0) or 0.0
+            ):
+                by_component[comp] = item
+        ranked = sorted(
+            by_component.values(),
+            key=lambda x: (
+                -float(x.get("confidence", 0.0) or 0.0),
+                str(x.get("component") or ""),
+            ),
+        )
+
+        selected_items: list[dict] = []
+        for item in ranked:
+            comp = str(item.get("component") or "").strip()
+            if not comp:
+                continue
             try:
-                comp_conf = float(comp_conf) if comp_conf is not None else 0.0
+                comp_conf = float(item.get("confidence", 0.0) or 0.0)
             except (TypeError, ValueError):
                 comp_conf = 0.0
-            localized_match = _get_localized_match(comp, t_str)
-            if localized_match is not None:
-                loc_time = (localized_match.time or "").strip()
-                loc_sev = float(getattr(localized_match, "severity", 0.0) or 0.0)
-                detail_parts.append(
-                    f"localized_hit={loc_time or 'unknown'}"
-                )
-                if loc_sev > 0:
-                    detail_parts.append(f"localized_severity={loc_sev:.0f}")
-                evidence = " | ".join(detail_parts)
-            else:
-                evidence = " | ".join(detail_parts) if detail_parts else clues
-            # Prune: keep only components with sufficiently high anomaly confidence,
-            # or ones that were already discovered in localization (within ±5min).
-            if comp_conf <= 0.5 and localized_match is None:
-                self._log_service(
-                    f"[Expand] Pruned dependency {comp!r} at {t_str!r}: "
-                    f"has_anomaly={has_anom!r}, confidence={comp_conf:.2f} "
-                    "(not in localization within ±5min)."
-                )
-                pruned_low_conf += 1
+            if comp_conf < 0.50:
                 continue
-            to_add.append((comp, t_str, rel_str, comp_conf, evidence, localized_match))
+            from_hyp = str(item.get("from_hypothesis_component") or "").strip()
+            parent_id = hypothesis_parent_ids[0]
+            if from_hyp and from_hyp in hypothesis_by_component:
+                parent_id = hypothesis_by_component[from_hyp][0]
+            if (parent_id, comp) in existing_children_under_parent:
+                continue
+            current_count = int(self._expand_component_existing_count.get(comp, 0) or 0) + 1
+            self._expand_component_existing_count[comp] = current_count
+            selected_items.append(item)
 
-        # Summary: how many topology dependencies vs how many anomaly candidates kept.
-        total_dep = len(set(graph_related or []))
-        kept = len(to_add)
-        # Summary: keep a compact "X/Y" ratio for visualization, and log a
-        # more descriptive message to session.log.
-        ratio_str = f"{kept}/{total_dep}" if total_dep > 0 else f"{kept}/0"
-        summary = f"Expand anomalies kept: {ratio_str} dependency candidates"
-        if total_dep > 0:
-            self._log_service(f"[Expand] {summary}")
-        logger.info(
-            "[Expand] %s summary | deps=%d verdicts=%d kept=%d skipped_no_anomaly=%d "
-            "skipped_not_problematic=%d pruned_low_conf=%d skipped_duplicate=%d",
-            best.component,
-            total_dep,
-            len(components_info),
-            kept,
-            skipped_not_anomaly,
-            skipped_not_problematic,
-            pruned_low_conf,
-            skipped_duplicate,
-        )
-        if kept == 0 and total_dep > 0:
-            logger.info(
-                "[Expand] %s kept 0/%d dependencies after filtering. Check session.log for per-component verdict details.",
-                best.component,
-                total_dep,
+        if not selected_items:
+            self._log_service(
+                f"[Expand] Trace-expand selected only low-confidence or duplicate/already-expanded components for hypotheses="
+                f"{[n.component for n in hypothesis_nodes]!r}."
             )
+            return []
 
-        for comp, t_str, rel_str, comp_conf, evidence, localized_match in to_add:
-            rel_infos = relation_meta_map.get(comp) or []
+        new_ids: list[str] = []
+        for selected in selected_items:
+            comp = str(selected.get("component") or "").strip()
+            from_hyp = str(selected.get("from_hypothesis_component") or "").strip()
+            parent_id = hypothesis_parent_ids[0]
+            parent_component = anchor.component
+            parent_time = anchor.time
+            if from_hyp and from_hyp in hypothesis_by_component:
+                parent_id = hypothesis_by_component[from_hyp][0]
+                parent_component = hypothesis_by_component[from_hyp][1].component
+                parent_time = hypothesis_by_component[from_hyp][1].time
+            t_str = str(selected.get("time") or parent_time or "").strip() or parent_time
+            try:
+                comp_conf = float(selected.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                comp_conf = 0.0
+            relation_hint = str(selected.get("relation_hint") or "trace_expand").strip() or "trace_expand"
+            why = str(selected.get("why") or "").strip()
+            source = str(selected.get("evidence_source") or "").strip()
+            causal_direction = str(selected.get("causal_direction") or "").strip().lower()
+            component_level = str(selected.get("component_level") or "").strip().lower()
+            why_not_reverse = str(selected.get("why_not_reverse") or "").strip()
+
+            rel_infos = trace_expand_relation_map.get(comp) or [
+                {
+                    "relation_family": "trace_expand_target",
+                    "relation_type": relation_hint.replace(" ", "_"),
+                    "anomaly_type": None,
+                    "time": t_str,
+                    "label": "trace_expand_target",
+                    "metadata": {
+                        "why": why,
+                        "requested_component": comp,
+                        "from_component": parent_component,
+                        "confidence": comp_conf,
+                        "evidence_source": source,
+                        "causal_direction": causal_direction,
+                        "component_level": component_level,
+                        "why_not_reverse": why_not_reverse,
+                    },
+                }
+            ]
+            rel_str = self._relation_label_from_infos(rel_infos)
+            evidence_parts = [
+                "trace_expand_multi",
+                f"relation_hint={relation_hint}",
+                f"confidence={comp_conf:.2f}",
+            ]
+            if source:
+                evidence_parts.append(f"source={source}")
+            if causal_direction:
+                evidence_parts.append(f"causal_direction={causal_direction}")
+            if component_level:
+                evidence_parts.append(f"component_level={component_level}")
+            if why_not_reverse:
+                evidence_parts.append(f"why_not_reverse={why_not_reverse}")
+            if why:
+                evidence_parts.append(f"why={why}")
+            evidence = " | ".join(evidence_parts)
+
             rc_id = self.tree.add_candidate(
                 stage="expand",
                 component=comp,
                 time_str=t_str,
-                parent_id=hypothesis_ids[0],
-                evidence=evidence or ratio_str,
+                parent_id=parent_id,
+                evidence=evidence,
                 relation=rel_str,
                 confidence=comp_conf,
-                localized_match=localized_match is not None,
-                localized_time=(localized_match.time if localized_match is not None else None),
-                localized_severity=(
-                    float(getattr(localized_match, "severity", 0.0) or 0.0)
-                    if localized_match is not None else 0.0
-                ),
+                localized_match=False,
+                localized_time=None,
+                localized_severity=0.0,
             )
             self._attach_expand_relation_edges(
-                hypothesis_ids[0],
-                best.component,
+                parent_id,
+                parent_component,
                 rc_id,
                 comp,
                 rel_infos,
             )
-            new_candidate_ids.append(rc_id)
             self._log_service(
-                f"  + New candidate from expand: {comp} "
+                f"  + New candidate from trace-expand: {comp} "
                 f"(time={t_str!r}, confidence={comp_conf:.2f}, relation={rel_str!r}, evidence={evidence!r})"
             )
-            self._update_live_view()
-        self._register_deployment_containment_for_expand(
-            hypothesis_ids[0],
-            best.component,
-            new_candidate_ids,
-            deploy_groups,
-        )
-        if deploy_groups:
-            self._update_live_view()
-        return new_candidate_ids
+            new_ids.append(rc_id)
+        self._update_live_view()
+        return new_ids
 
     # ── Stage 2: Deep Dive (fixed pipeline) ───────────────────────────
 
@@ -4085,9 +4727,12 @@ class StagedRCAPipeline:
         *,
         reason: str | None,
         reason_class: str | None,
+        verdict: str | None = None,
         confidence: float,
         explanation: str,
         checked_reasons: list[dict] | None = None,
+        next_kpis: list[str] | None = None,
+        edge_targets: list[dict] | None = None,
         time_str: str | None = None,
     ) -> None:
         """Store deep-dive result on the existing node instead of creating a child node."""
@@ -4096,20 +4741,33 @@ class StagedRCAPipeline:
         node.deep_dive_reason = reason or node.deep_dive_reason
         node.deep_dive_reason_class = reason_class or node.deep_dive_reason_class
         node.deep_dive_time = node.time
+        conf_val = float(confidence or 0.0)
         node.deep_dive_confidence = max(
             float(getattr(node, "deep_dive_confidence", 0.0) or 0.0),
-            float(confidence or 0.0),
+            conf_val,
         )
+        prev_count = int(getattr(node, "deep_dive_confidence_count", 0) or 0)
+        prev_avg = float(getattr(node, "deep_dive_confidence_avg", 0.0) or 0.0)
+        new_count = prev_count + 1
+        new_avg = ((prev_avg * prev_count) + conf_val) / float(new_count)
+        node.deep_dive_confidence_count = new_count
+        node.deep_dive_confidence_avg = new_avg
         if explanation:
             node.deep_dive_evidence = str(explanation)[:1200]
         if checked_reasons is not None:
             node.deep_dive_checked_reasons = list(checked_reasons)[:16]
+        if verdict:
+            node.deep_dive_verdict = str(verdict)
+        if next_kpis is not None:
+            node.deep_dive_next_kpis = [str(x) for x in next_kpis][:24]
+        if edge_targets is not None:
+            node.deep_dive_edge_targets = [x for x in edge_targets if isinstance(x, dict)][:16]
 
         # Keep deep-dive conclusion as authoritative class, but keep reason hint if already present.
         if reason_class:
             node.root_cause_reason_class = reason_class
-        if confidence >= 0.50:
-            node.confidence = max(float(getattr(node, "confidence", 0.0) or 0.0), float(confidence))
+        if conf_val >= 0.50:
+            node.confidence = max(float(getattr(node, "confidence", 0.0) or 0.0), conf_val)
             if reason:
                 node.reason = reason
 
@@ -4118,7 +4776,10 @@ class StagedRCAPipeline:
         self.tree._record(
             "deep_dive_update",
             node.id,
-            confidence=float(confidence or 0.0),
+            confidence=conf_val,
+            confidence_avg=float(getattr(node, "deep_dive_confidence_avg", 0.0) or 0.0),
+            confidence_count=int(getattr(node, "deep_dive_confidence_count", 0) or 0),
+            verdict=str(verdict or ""),
             reason=(reason_class or reason or ""),
         )
         self._update_live_view()
@@ -4552,8 +5213,6 @@ class StagedRCAPipeline:
                         value_is_problematic.strip().lower()
                         in {"true", "yes", "1", "problematic"}
                     )
-                if value_is_problematic is False and severity < 70.0:
-                    continue
                 result.append({
                     "component": comp_name,
                     "change": o.get("change", "trace_path anomaly"),
@@ -4577,7 +5236,6 @@ class StagedRCAPipeline:
             outliers = parsed.get("outliers", [])
             result: list[dict] = []
             filtered_aux: list[dict] = []
-            seen_components: set[tuple[str, str]] = set()
             for o in outliers:
                 if not isinstance(o, dict):
                     continue
@@ -4605,14 +5263,6 @@ class StagedRCAPipeline:
                     if include_filtered_aux:
                         filtered_aux.append({**aux_base, "drop_reason": "cyclic"})
                     continue
-                key = (comp_name, kpi_val)
-                # Drop repeated outliers for the same (component, kpi) to avoid
-                # reporting multiple similar spikes/drops on a repeating pattern.
-                if key in seen_components:
-                    if include_filtered_aux:
-                        filtered_aux.append({**aux_base, "drop_reason": "duplicate_component_kpi"})
-                    continue
-                seen_components.add(key)
                 sev_raw = o.get("severity", 0)
                 try:
                     severity = float(sev_raw)
@@ -4627,8 +5277,8 @@ class StagedRCAPipeline:
                         severity = 20.0
                     else:
                         severity = 0.0
-                # Drop weak outliers (severity <= 70)
-                if severity <= 70.0:
+                # Keep localization candidates only when severity >= 50.
+                if severity < 50.0:
                     if include_filtered_aux:
                         filtered_aux.append({**aux_base, "drop_reason": "low_severity"})
                     continue
@@ -4637,10 +5287,13 @@ class StagedRCAPipeline:
                     value_is_problematic = value_is_problematic.strip().lower() in {
                         "true", "yes", "1", "problematic"
                     }
-                if value_is_problematic is False:
-                    if include_filtered_aux:
-                        filtered_aux.append({**aux_base, "drop_reason": "not_problematic"})
-                    continue
+                # Temporarily disabled: do not drop localization candidates only
+                # because value_is_problematic=false. Keep the annotation, but let
+                # later stages decide whether it is symptom/noise/root cause.
+                # if value_is_problematic is False:
+                #     if include_filtered_aux:
+                #         filtered_aux.append({**aux_base, "drop_reason": "not_problematic"})
+                #     continue
                 normalized_time = self._normalize_outlier_time(o.get("time"))
                 result.append({
                     "component": comp_name,
@@ -4814,6 +5467,10 @@ class StagedRCAPipeline:
                 if suffix in components:
                     return level
         # 3) Fallback heuristics (best-effort only)
+        # Market pod cmdb_id often uses "node-X.<pod-name>".
+        # If suffix lookup failed but this shape appears, treat it as pod first.
+        if "." in comp and (comp.startswith("node-") or comp.startswith("os_")):
+            return "pod"
         if comp.startswith("node-") or comp.startswith("os_"):
             return "node"
         if comp.startswith("docker_"):

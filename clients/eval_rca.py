@@ -25,6 +25,17 @@ def _try_float(val):
         return None
 
 
+def _clip(text, width):
+    s = str(text)
+    if width <= 1:
+        return s[:width]
+    return s if len(s) <= width else s[: width - 1] + "…"
+
+
+def _ratio_cell(n, total):
+    return f"{n:>4}/{total:<4} ({_pct(n, total):>6})"
+
+
 _TIME_FMTS = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"]
 
 
@@ -114,13 +125,27 @@ def analyze(rows, time_threshold):
             by_reason[gt_r]["all"] += 1
 
     if by_reason:
+        reason_w = max(20, min(48, max(len(str(r)) for r in by_reason.keys())))
+        n_w = 4
+        metric_w = 19
+        line_w = 2 + reason_w + 2 + n_w + 2 + metric_w * 4 + 2
         print(f"\n  By ground truth reason:")
-        print(f"  {'Reason':<20}  {'N':>4}  {'Comp':>18}  {'Reason':>18}  {'Time':>18}  {'All':>18}")
-        print(f"  {'-'*104}")
+        print(
+            f"  {'Reason':<{reason_w}}  {'N':>{n_w}}  "
+            f"{'Comp':>{metric_w}}  {'Reason':>{metric_w}}  "
+            f"{'Time':>{metric_w}}  {'All':>{metric_w}}"
+        )
+        print(f"  {'-' * line_w}")
         for reason in sorted(by_reason):
             d = by_reason[reason]
             t = d["total"]
-            print(f"  {reason:<20}  {t:>4}  {d['comp']:>4}/{t:<4} ({_pct(d['comp'], t):>5})  {d['reason']:>4}/{t:<4} ({_pct(d['reason'], t):>5})  {d['time']:>4}/{t:<4} ({_pct(d['time'], t):>5})  {d['all']:>4}/{t:<4} ({_pct(d['all'], t):>5})")
+            print(
+                f"  {_clip(reason, reason_w):<{reason_w}}  {t:>{n_w}}  "
+                f"{_ratio_cell(d['comp'], t):>{metric_w}}  "
+                f"{_ratio_cell(d['reason'], t):>{metric_w}}  "
+                f"{_ratio_cell(d['time'], t):>{metric_w}}  "
+                f"{_ratio_cell(d['all'], t):>{metric_w}}"
+            )
 
     # --- Per case ---
     print(f"\n  Per case:")

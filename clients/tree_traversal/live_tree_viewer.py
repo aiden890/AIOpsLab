@@ -683,7 +683,12 @@ class LiveTreeViewer:
                 elif isinstance(kpi_val, (list, tuple)):
                     kpi_list = [str(k).strip() for k in kpi_val if str(k).strip()]
                 if kpi_list:
-                    label_parts.append(_short_kpi_label(kpi_list[0], max_len=18))
+                    # Show all localized KPIs (one per line) so multi-KPI anomalies
+                    # are fully visible in live_tree.png.
+                    label_parts.extend(
+                        _short_kpi_label(kpi_name, max_len=18)
+                        for kpi_name in kpi_list
+                    )
             elif stage in ("deep_dive", "expand"):
                 rc_class = getattr(node, "root_cause_reason_class", None) or ""
                 if (rc_class or "").strip():

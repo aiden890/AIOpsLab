@@ -4,7 +4,7 @@
 # For Azure OpenAI: use SOURCE: "AI", leave API_KEY/API_BASE empty
 # to auto-detect from .env (AZURE_OPENAI_API_KEY, AZURE_OPENAI_BASE_URL)
 
-SOURCE:   "AI"
-MODEL:    "gpt-5"
+SOURCE:   "OpenAI"
+MODEL:    "gpt-5-mini"
 REASONING_EFFORT: "low"
 # API_KEY and API_BASE are loaded from .env (AZURE_OPENAI_API_KEY, AZURE_OPENAI_BASE_URL)

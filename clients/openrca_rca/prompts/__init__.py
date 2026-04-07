@@ -12,6 +12,8 @@ BASIC_PROMPTS = {
     "openrca_telecom": basic_prompt_telecom,
     "openrca_market_cb1": basic_prompt_market,
     "openrca_market_cb2": basic_prompt_market,
+    "openrca_market_cloudbed1": basic_prompt_market,
+    "openrca_market_cloudbed2": basic_prompt_market,
 }
 
 

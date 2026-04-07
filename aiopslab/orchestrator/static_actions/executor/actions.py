@@ -38,6 +38,16 @@ from aiopslab.utils.actions import (
 )
 from aiopslab.orchestrator.static_actions.executor.api_router import load_config
 from aiopslab.orchestrator.static_actions.executor.runner import execute_act
+from clients.tree_traversal.tools.trace_expand.market_cb1 import (
+    get_edge_error_rate_minutely,
+    get_edge_latency_minutely,
+    list_colocated_components,
+)
+from clients.tree_traversal.tools.deep_dive.router import (
+    dispatch_deep_dive_tool,
+    get_deep_dive_tool_specs,
+)
+from clients.tree_traversal.tools.trace_expand.router import get_trace_expand_tool_specs
 
 
 class StaticRCAActionsWithExecutor(StaticRCAActions):
@@ -77,6 +87,53 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
         self._metrics_enricher = None
         # Traces enricher: Callable[[str], str] that appends trace anomaly summary to get_traces result
         self._traces_enricher = None
+
+    def _resolve_trace_tool_base_path(self) -> Path | None:
+        base = getattr(getattr(self, "static_app", None), "base_path", None)
+        ns = str(getattr(self, "_namespace", "") or "").strip()
+        if base is None or not ns:
+            return None
+        ns_path = Path(base) / ns
+        if ns_path.exists():
+            return ns_path
+        return None
+
+    def _infer_dataset_name_for_tools(self) -> str:
+        pid = str(getattr(self, "problem_id", "") or "").strip().lower()
+        if pid.startswith("openrca_market"):
+            return "openrca_market_cb1"
+        if pid.startswith("openrca_telecom"):
+            return "openrca_telecom"
+        if pid.startswith("openrca_bank"):
+            return "openrca_bank"
+        base = str(getattr(getattr(self, "static_app", None), "base_path", "") or "").lower()
+        if "market_cloudbed1" in base or "market_cb1" in base:
+            return "openrca_market_cb1"
+        if "telecom" in base:
+            return "openrca_telecom"
+        if "bank" in base:
+            return "openrca_bank"
+        return ""
+
+    def _trace_expand_tool_dispatch(self, dataset_name: str, tool_name: str, tool_args: dict) -> dict:
+        name = str(tool_name or "").strip()
+        args = dict(tool_args or {})
+        dataset = str(dataset_name or "").lower()
+        if dataset.startswith("openrca_market"):
+            if name == "list_colocated_components":
+                return list_colocated_components(**args)
+            if name == "get_edge_latency_minutely":
+                return get_edge_latency_minutely(**args)
+            if name == "get_edge_error_rate_minutely":
+                return get_edge_error_rate_minutely(**args)
+        available = [spec.name for spec in get_trace_expand_tool_specs(dataset_name)]
+        raise ValueError(
+            f"Unsupported tool_name={name!r} for dataset={dataset_name!r}. "
+            f"available_tools={available!r}"
+        )
+
+    def _deep_dive_tool_dispatch(self, dataset_name: str, tool_name: str, tool_args: dict) -> object:
+        return dispatch_deep_dive_tool(dataset_name, tool_name, tool_args)
 
     def setup_executor(
         self,
@@ -339,6 +396,69 @@ class StaticRCAActionsWithExecutor(StaticRCAActions):
             result = self._result_enricher(result)
 
         return result
+
+    @executor_action
+    def tool(self, tool_name: str, tool_args: dict | None = None) -> str:
+        """Call a dataset-specific tool.
+
+        Args:
+            tool_name: Tool identifier from dataset-specific tool catalog.
+            tool_args: JSON object arguments for the tool.
+        """
+        name = str(tool_name or "").strip()
+        if not name:
+            return "Error: tool_name is required."
+        if tool_args is None:
+            args: dict = {}
+        elif isinstance(tool_args, dict):
+            args = dict(tool_args)
+        elif isinstance(tool_args, str):
+            try:
+                parsed = json.loads(tool_args)
+            except Exception as exc:
+                return f"Error: tool_args string must be JSON object. {exc}"
+            if not isinstance(parsed, dict):
+                return "Error: tool_args must be a JSON object."
+            args = parsed
+        else:
+            return "Error: tool_args must be an object or JSON string."
+
+        dataset_name = self._infer_dataset_name_for_tools()
+        if not dataset_name:
+            return "Error: cannot infer dataset for tool routing."
+
+        base_path = self._resolve_trace_tool_base_path()
+        if base_path is not None:
+            # Use runtime-resolved dataset path by default.
+            # If caller passed an invalid base_path (common LLM mistake: dataset name string),
+            # replace it with the resolved namespace path.
+            if "base_path" not in args:
+                args["base_path"] = str(base_path)
+            else:
+                try:
+                    candidate = Path(str(args.get("base_path") or "").strip())
+                    if not candidate.exists():
+                        args["base_path"] = str(base_path)
+                except Exception:
+                    args["base_path"] = str(base_path)
+
+        try:
+            deep_specs = [x.name for x in get_deep_dive_tool_specs(dataset_name)]
+            if name in deep_specs:
+                out = self._deep_dive_tool_dispatch(dataset_name, name, args)
+            else:
+                out = self._trace_expand_tool_dispatch(dataset_name, name, args)
+        except Exception as exc:
+            return f"Error: tool() failed for {name!r}: {exc}"
+        try:
+            import pandas as _pd
+            if isinstance(out, _pd.DataFrame):
+                if out.empty:
+                    return "(empty DataFrame)"
+                return out.to_string()
+        except Exception:
+            pass
+        return json.dumps(out, ensure_ascii=False, indent=2, default=str)
 
     def _append_notebook_cell(self, step: int, instruction: str, code: str, result: str):
         """Append a markdown header + code cell to the .ipynb notebook file."""

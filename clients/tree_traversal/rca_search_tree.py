@@ -38,9 +38,16 @@ class TreeNode:
     deep_dive_reason: Optional[str] = None
     deep_dive_reason_class: Optional[str] = None
     deep_dive_confidence: float = 0.0
+    deep_dive_confidence_avg: float = 0.0
+    deep_dive_confidence_count: int = 0
     deep_dive_time: Optional[str] = None
     deep_dive_evidence: str = ""
     deep_dive_checked_reasons: list[dict] = field(default_factory=list)
+    deep_dive_verdict: Optional[str] = None
+    deep_dive_next_kpis: list[str] = field(default_factory=list)
+    deep_dive_edge_targets: list[dict] = field(default_factory=list)
+    related_parent_ids: list[str] = field(default_factory=list)
+    related_parent_components: list[str] = field(default_factory=list)
 
 
 class SearchTree:
@@ -121,6 +128,11 @@ class SearchTree:
             localized_time=localized_time,
             localized_severity=localized_severity,
         )
+        if parent_id:
+            node.related_parent_ids = [parent_id]
+            parent = self.nodes.get(parent_id)
+            if parent is not None and parent.component:
+                node.related_parent_components = [parent.component]
         self.nodes[nid] = node
         if parent_id in self.nodes:
             self.nodes[parent_id].children.append(nid)
@@ -183,6 +195,12 @@ class SearchTree:
             if existing_key == dedupe_key:
                 return
         self.relation_edges.append(edge)
+        if dst_node_id and dst_node_id in self.nodes:
+            dst = self.nodes[dst_node_id]
+            if src_node_id and src_node_id not in dst.related_parent_ids:
+                dst.related_parent_ids.append(src_node_id)
+            if src_component and src_component not in dst.related_parent_components:
+                dst.related_parent_components.append(src_component)
 
     def upsert_containment_group(
         self,
@@ -319,9 +337,16 @@ class SearchTree:
                     "deep_dive_reason": getattr(n, "deep_dive_reason", None),
                     "deep_dive_reason_class": getattr(n, "deep_dive_reason_class", None),
                     "deep_dive_confidence": getattr(n, "deep_dive_confidence", 0.0),
+                    "deep_dive_confidence_avg": getattr(n, "deep_dive_confidence_avg", 0.0),
+                    "deep_dive_confidence_count": getattr(n, "deep_dive_confidence_count", 0),
                     "deep_dive_time": getattr(n, "deep_dive_time", None),
                     "deep_dive_evidence": getattr(n, "deep_dive_evidence", ""),
                     "deep_dive_checked_reasons": getattr(n, "deep_dive_checked_reasons", []),
+                    "deep_dive_verdict": getattr(n, "deep_dive_verdict", None),
+                    "deep_dive_next_kpis": getattr(n, "deep_dive_next_kpis", []),
+                    "deep_dive_edge_targets": getattr(n, "deep_dive_edge_targets", []),
+                    "related_parent_ids": getattr(n, "related_parent_ids", []),
+                    "related_parent_components": getattr(n, "related_parent_components", []),
                 }
                 for n in self.nodes.values()
             ],
@@ -372,9 +397,16 @@ class SearchTree:
                 deep_dive_reason=nd.get("deep_dive_reason"),
                 deep_dive_reason_class=nd.get("deep_dive_reason_class"),
                 deep_dive_confidence=float(nd.get("deep_dive_confidence", 0.0) or 0.0),
+                deep_dive_confidence_avg=float(nd.get("deep_dive_confidence_avg", 0.0) or 0.0),
+                deep_dive_confidence_count=int(nd.get("deep_dive_confidence_count", 0) or 0),
                 deep_dive_time=nd.get("deep_dive_time"),
                 deep_dive_evidence=nd.get("deep_dive_evidence", ""),
                 deep_dive_checked_reasons=list(nd.get("deep_dive_checked_reasons", []) or []),
+                deep_dive_verdict=nd.get("deep_dive_verdict"),
+                deep_dive_next_kpis=list(nd.get("deep_dive_next_kpis", []) or []),
+                deep_dive_edge_targets=list(nd.get("deep_dive_edge_targets", []) or []),
+                related_parent_ids=list(nd.get("related_parent_ids", []) or []),
+                related_parent_components=list(nd.get("related_parent_components", []) or []),
             )
             tree.nodes[node.id] = node
         return tree

@@ -5,6 +5,7 @@ and generic OpenAI-compatible endpoints.
 """
 
 import logging
+import math
 import os
 import time
 import yaml
@@ -122,6 +123,49 @@ _BACKENDS = {
 logger = logging.getLogger("openrca_rca")
 
 
+def _json_safe(value):
+    """Convert value to JSON-safe data (no NaN/Inf, no exotic objects)."""
+    if value is None or isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, bytes):
+        try:
+            return value.decode("utf-8", errors="replace")
+        except Exception:
+            return str(value)
+    # Fallback: stringify objects (e.g., numpy scalars, datetime-like custom objects).
+    return str(value)
+
+
+def _sanitize_messages(messages):
+    """Normalize chat messages to stable JSON-safe list[dict]."""
+    sanitized = _json_safe(messages)
+    if not isinstance(sanitized, list):
+        return [{"role": "user", "content": str(sanitized)}]
+    out = []
+    for m in sanitized:
+        if isinstance(m, dict):
+            role = str(m.get("role", "user"))
+            content = m.get("content", "")
+            out.append({"role": role, "content": content})
+        else:
+            out.append({"role": "user", "content": str(m)})
+    return out
+
+
+def _is_invalid_json_body_error(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    return (
+        "could not parse the json body of your request" in msg
+        or ("invalid_request_error" in msg and "json body" in msg)
+    )
+
+
 def get_chat_completion(messages, configs, temperature=0.0):
     """Call LLM with unlimited retry on rate limit (429).
 
@@ -138,10 +182,19 @@ def get_chat_completion(messages, configs, temperature=0.0):
         raise ValueError(f"Invalid SOURCE '{configs['SOURCE']}'. Choose from: {list(_BACKENDS.keys())}")
 
     attempt = 0
+    invalid_json_retried = False
+    safe_messages = _sanitize_messages(messages)
     while True:
         try:
-            return backend(messages, temperature, configs)
+            return backend(safe_messages, temperature, configs)
         except Exception as e:
+            if _is_invalid_json_body_error(e) and not invalid_json_retried:
+                invalid_json_retried = True
+                safe_messages = _sanitize_messages(safe_messages)
+                logger.warning(
+                    "BadRequest invalid JSON body detected; retried once with JSON-safe sanitized messages."
+                )
+                continue
             if "429" in str(e) or "rate" in str(e).lower():
                 wait = min(2 ** attempt, 60)
                 logger.warning(f"Rate limited (attempt {attempt + 1}), retrying in {wait}s")

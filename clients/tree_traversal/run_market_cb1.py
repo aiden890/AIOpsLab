@@ -13,11 +13,12 @@ Usage:
     python clients/tree_traversal/run_market_cb1.py --parallel 2
     python clients/tree_traversal/run_market_cb1.py --use-prefiltered prefiltered_telemetry
     python clients/tree_traversal/run_market_cb1.py --problem openrca_market_cb1-task_6-0 --use-prefiltered prefiltered_telemetry --no-video --live-view
-    python clients/tree_traversal/run_market_cb1.py --live-view --no-video --live-view --parallel 8 --eval-id test-v1
+    python clients/tree_traversal/run_market_cb1.py --live-view --no-video --live-view --parallel 3 --eval-id kpi-expand-v1
 """
 
 import argparse
 import csv
+import json
 import logging
 import os
 import re
@@ -51,7 +52,9 @@ DATASET = "openrca_market_cb1"
 MAX_STEPS = 60
 
 # 10 single-fault problems with diverse reasons/components/levels
-TARGET_INDICES = [0, 1, 2, 3, 4, 5, 8, 12, 13, 15]
+TARGET_INDICES = [0, 1, 2, 4, 5, 8, 13, 15, 20, 32]
+# TARGET_INDICES = [0, 1, 2, 4, 5, 8, 13, 15, 18, 19]
+# TARGET_INDICES = [18, 19, 20, 21, 24, 25, 26, 29, 32, 33]
 
 SCORE_FIELDS = [
     "timestamp", "eval_id", "model", "problem_id",
@@ -116,6 +119,56 @@ def append_score(scores_path: Path, row: dict):
             if is_new:
                 writer.writeheader()
             writer.writerow(row)
+
+
+def snapshot_vision_artifacts(task_save_dir: Path) -> Path:
+    """Snapshot generated vision images under task_save_dir/vision with a manifest."""
+    vision_dir = task_save_dir / "vision"
+    vision_dir.mkdir(parents=True, exist_ok=True)
+
+    image_exts = {".png", ".jpg", ".jpeg", ".webp"}
+    entries: list[dict] = []
+    seen_targets: set[str] = set()
+
+    for src in sorted(task_save_dir.rglob("*")):
+        if not src.is_file():
+            continue
+        if vision_dir in src.parents:
+            continue
+        if src.suffix.lower() not in image_exts:
+            continue
+
+        rel = src.relative_to(task_save_dir)
+        target_name = "__".join(rel.parts)
+        if not target_name:
+            continue
+        if target_name in seen_targets:
+            base = Path(target_name).stem
+            ext = Path(target_name).suffix
+            i = 2
+            while f"{base}__{i}{ext}" in seen_targets:
+                i += 1
+            target_name = f"{base}__{i}{ext}"
+        seen_targets.add(target_name)
+
+        dst = vision_dir / target_name
+        shutil.copy2(src, dst)
+        entries.append(
+            {
+                "source": str(rel),
+                "snapshot": str(dst.relative_to(task_save_dir)),
+                "size_bytes": src.stat().st_size,
+            }
+        )
+
+    manifest_path = vision_dir / "vision_manifest.json"
+    payload = {
+        "task_dir": str(task_save_dir),
+        "image_count": len(entries),
+        "images": entries,
+    }
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path
 
 
 def build_problem_ids(indices: list[int] | None = None) -> list[str]:
@@ -209,6 +262,7 @@ def run_single_problem(
     llm_configs: dict,
     worker_id: int = 0,
 ) -> dict | None:
+    task_save_dir: Path | None = None
     if args.use_prefiltered is not None:
         condition = None
     else:
@@ -249,6 +303,7 @@ def run_single_problem(
         # ── Initialize SessionPrint log ───────────────────────────────
         log_filepath = task_save_dir / "session.log"
         sprint.init_log_file(str(log_filepath))
+        sprint.service_detail(f"Session log path: {log_filepath}")
         sprint.problem_init(problem_desc, instructs, apis)
 
         dataset_config = problem.app.dataset_config
@@ -459,12 +514,24 @@ def run_single_problem(
         if not args.no_video and tree_path.exists():
             render_manim_video(str(tree_path), output_dir=str(task_save_dir / "media"))
 
+        # ── Snapshot Vision Artifacts ─────────────────────────────────
+        manifest_path = snapshot_vision_artifacts(task_save_dir)
+        sprint.service_detail(f"Vision snapshot manifest: {manifest_path}")
+
         return {"score": score, "success": results.get("success", False)}
 
     except Exception as e:
         logger.error(f"Error running {pid}: {e}")
         import traceback
         traceback.print_exc()
+        if task_save_dir is not None and task_save_dir.exists():
+            try:
+                manifest_path = snapshot_vision_artifacts(task_save_dir)
+                sprint.service_detail(
+                    f"[Exception path] Vision snapshot manifest: {manifest_path}"
+                )
+            except Exception as snapshot_err:
+                logger.warning(f"Failed to snapshot vision artifacts for {pid}: {snapshot_err}")
         return None
     finally:
         sprint.close_log_file()

@@ -22,6 +22,8 @@ Use it to fetch raw telemetry data from the environment:
     log_path = telemetry.get_logs()                 # all logs
     log_path = telemetry.get_logs("service_name")   # specific service
     metric_path = telemetry.get_metrics()
+    metric_files = telemetry.list_metric_files()    # per-file metric csv list
+    metric_service_path = telemetry.get_metric_file("metric_service.csv")
     trace_path = telemetry.get_traces()
 
 Each call returns the **full file path** to a CSV. Read it directly:
@@ -31,7 +33,8 @@ Each call returns the **full file path** to a CSV. Read it directly:
     metric_df = pd.read_csv(metric_path)
     trace_df = pd.read_csv(trace_path)
 
-Note: Call telemetry.get_*() only once per data type, then reuse the cached DataFrame variable."""
+Note: For precise KPI semantics, prefer per-file metrics via
+telemetry.get_metric_file("metric_*.csv") over merged metrics.csv when possible."""
 
 _MARKET_RULE_APPENDIX = """
 
